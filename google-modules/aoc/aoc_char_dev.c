@@ -92,7 +92,7 @@ static struct acd_device_entry *acd_device_entry_for_inode(struct inode *inode)
 	return NULL;
 }
 
-static char *acd_devnode(struct device *dev, umode_t *mode)
+static char *acd_devnode(const struct device *dev, umode_t *mode)
 {
 	if (!mode || !dev)
 		return NULL;

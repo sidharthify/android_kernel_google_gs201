@@ -357,7 +357,7 @@ static struct aocc_device_entry *aocc_device_entry_for_inode(struct inode *inode
 	return NULL;
 }
 
-static char *aocc_devnode(struct device *dev, umode_t *mode)
+static char *aocc_devnode(const struct device *dev, umode_t *mode)
 {
 	if (!mode || !dev)
 		return NULL;

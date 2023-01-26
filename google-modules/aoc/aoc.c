@@ -2115,7 +2115,7 @@ static const struct file_operations aoc_fops = {
 	.owner = THIS_MODULE,
 };
 
-static char *aoc_devnode(struct device *dev, umode_t *mode)
+static char *aoc_devnode(const struct device *dev, umode_t *mode)
 {
 	if (!mode || !dev)
 		return NULL;
