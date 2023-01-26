@@ -1220,9 +1220,9 @@ static long amcs_cdev_compat_ioctl(struct file *file, unsigned int cmd, unsigned
 #define amcs_cdev_compat_ioctl NULL;
 #endif
 
-static char *amcs_devnode(struct device *dev, umode_t *mode)
+static char *amcs_devnode(const struct device *dev, umode_t *mode)
 {
-	struct audiometrics_priv_type *priv = NULL;
+	const struct audiometrics_priv_type *priv;
 
 	if (!mode || !dev)
 		return NULL;
