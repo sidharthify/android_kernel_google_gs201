@@ -5,15 +5,15 @@ SUBLEVEL = 158
 EXTRAVERSION =
 NAME = Curry Ramen
 
+ifeq ($(MAKECMDGOALS),)
+MAKECMDGOALS := Image.lz4 dtbs
+endif
+
 export KCONFIG_EXT_PREFIX := google-devices/gs201/
 export KCONFIG_EXT_SUFFIX := .gs201
 export KCONFIG_SOC_GS_PREFIX := google-modules/soc/gs/
 export KCONFIG_EXT_MODULES_PREFIX := ./
 KCFLAGS += -D__ANDROID_COMMON_KERNEL__
-
-ifeq ($(MAKECMDGOALS),)
-MAKECMDGOALS := Image.lz4 dtbs
-endif
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
