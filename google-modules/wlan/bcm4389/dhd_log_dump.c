@@ -25,6 +25,7 @@
 #ifdef DHD_LOG_DUMP
 
 #include <osl.h>
+#include <linux/sched/clock.h>
 #include <bcmutils.h>
 #include <bcmendian.h>
 #include <bcmstdlib_s.h>

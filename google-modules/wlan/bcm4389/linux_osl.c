@@ -37,6 +37,7 @@
 #include <osl.h>
 #include <bcmutils.h>
 #include <linux/delay.h>
+#include <linux/sched/clock.h>
 #include <linux/vmalloc.h>
 #include <pcicfg.h>
 

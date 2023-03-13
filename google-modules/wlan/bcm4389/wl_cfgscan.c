@@ -41,6 +41,7 @@
 #include <linux/kthread.h>
 #include <linux/netdevice.h>
 #include <linux/sched.h>
+#include <linux/sched/clock.h>
 #include <linux/etherdevice.h>
 #include <linux/wireless.h>
 #include <linux/ieee80211.h>

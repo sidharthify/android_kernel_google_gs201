@@ -33,6 +33,7 @@
 #include <dhd_pktlog.h>
 #include <dhd_wlfc.h>
 #include <dhd_debug.h>
+#include <linux/sched/clock.h>
 
 #ifdef DHD_COMPACT_PKT_LOG
 #include <bcmip.h>

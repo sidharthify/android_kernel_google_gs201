@@ -37,6 +37,7 @@
 
 #include <event_log.h>
 #include <event_trace.h>
+#include <linux/sched/clock.h>
 #include <msgtrace.h>
 #if defined(DBG_PKT_MON)
 #include <dhd_linux_priv.h>

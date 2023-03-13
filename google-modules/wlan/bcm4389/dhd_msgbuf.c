@@ -29,6 +29,7 @@
 
 #include <typedefs.h>
 #include <osl.h>
+#include <linux/sched/clock.h>
 
 #include <bcmutils.h>
 #include <bcmmsgbuf.h>

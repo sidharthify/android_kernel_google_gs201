@@ -32,6 +32,7 @@
 #include <dhd_dbg.h>
 #include <dhd_debug.h>
 
+#include <linux/sched/clock.h>
 #include <net/cfg80211.h>
 #include <wl_cfgvendor.h>
 

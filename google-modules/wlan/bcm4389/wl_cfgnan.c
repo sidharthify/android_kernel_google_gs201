@@ -34,6 +34,8 @@
 #include <wl_android.h>
 #include <wl_cfgnan.h>
 
+#include <linux/sched/clock.h>
+
 #if defined(BCMDONGLEHOST)
 #include <dngl_stats.h>
 #include <dhd.h>
