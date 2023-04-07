@@ -248,7 +248,7 @@ static int usb_audio_offload_init(struct xhci_hcd *xhci)
 		}
 
 		ret = iommu_map(domain, rmem->base, rmem->base, rmem->size,
-				IOMMU_READ | IOMMU_WRITE);
+				IOMMU_READ | IOMMU_WRITE, GFP_KERNEL);
 		if (ret < 0) {
 			dev_err(dev, "iommu_map error: %d\n", ret);
 			goto unmap_iommu;

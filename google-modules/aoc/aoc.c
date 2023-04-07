@@ -1242,7 +1242,7 @@ static void aoc_configure_iommu(struct aoc_prvdata *p, const struct firmware *fw
 		rc = iommu_map(domain, IOMMU_VADDR(iommu[i].value),
 						IOMMU_PADDR(iommu[i].value),
 						IOMMU_SIZE(iommu[i].value),
-						IOMMU_READ | IOMMU_WRITE);
+						IOMMU_READ | IOMMU_WRITE, GFP_KERNEL);
 		if (rc < 0) {
 			dev_err(
 				dev,
