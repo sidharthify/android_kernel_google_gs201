@@ -883,8 +883,7 @@ static const struct acpi_gpio_mapping acpi_st21nfc_gpios[] = {
 	{ "clkreq-gpios", &clkreq_gpios, 1},
 };
 
-static int st21nfc_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int st21nfc_probe(struct i2c_client *client)
 {
 	int ret;
 	struct st21nfc_device *st21nfc_dev;
@@ -1168,7 +1167,7 @@ static struct i2c_driver st21nfc_driver = {
 		.pm = &st21nfc_pm_ops,
 		.acpi_match_table = ACPI_PTR(st21nfc_acpi_match),
 	},
-	.probe		= st21nfc_probe,
+	.probe_new	= st21nfc_probe,
 	.remove		= st21nfc_remove,
 };
 
