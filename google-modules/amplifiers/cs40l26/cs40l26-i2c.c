@@ -30,7 +30,7 @@ static const struct of_device_id cs40l26_of_match[CS40L26_NUM_DEVS + 1] = {
 };
 MODULE_DEVICE_TABLE(of, cs40l26_of_match);
 
-static int cs40l26_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int cs40l26_i2c_probe(struct i2c_client *client)
 {
 	struct cs40l26_private *cs40l26;
 	int error;
@@ -81,7 +81,7 @@ static struct i2c_driver cs40l26_i2c_driver = {
 		.pm = &cs40l26_pm_ops,
 	},
 	.id_table = cs40l26_id_i2c,
-	.probe = cs40l26_i2c_probe,
+	.probe_new = cs40l26_i2c_probe,
 	.remove = cs40l26_i2c_remove,
 };
 

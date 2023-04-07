@@ -11502,8 +11502,7 @@ static const struct mfd_cell cs40l2x_devs[] = {
 	},
 };
 
-static int cs40l2x_i2c_probe(struct i2c_client *i2c_client,
-				const struct i2c_device_id *id)
+static int cs40l2x_i2c_probe(struct i2c_client *i2c_client)
 {
 	int ret, i;
 	struct cs40l2x_private *cs40l2x;
@@ -11940,7 +11939,7 @@ static struct i2c_driver cs40l2x_i2c_driver = {
 		.pm = &cs40l2x_pm_ops,
 	},
 	.id_table = cs40l2x_id,
-	.probe = cs40l2x_i2c_probe,
+	.probe_new = cs40l2x_i2c_probe,
 	.remove = cs40l2x_i2c_remove,
 };
 

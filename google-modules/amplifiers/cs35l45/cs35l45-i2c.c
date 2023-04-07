@@ -15,8 +15,7 @@
 #include "cs35l45.h"
 #include <sound/cs35l45.h>
 
-static int cs35l45_i2c_probe(struct i2c_client *client,
-			     const struct i2c_device_id *id)
+static int cs35l45_i2c_probe(struct i2c_client *client)
 {
 	struct cs35l45_private *cs35l45;
 	struct device *dev = &client->dev;
@@ -92,7 +91,7 @@ static struct i2c_driver cs35l45_i2c_driver = {
 		.pm = &cs35l45_pm_ops,
 	},
 	.id_table	= cs35l45_id_i2c,
-	.probe		= cs35l45_i2c_probe,
+	.probe_new	= cs35l45_i2c_probe,
 	.remove		= cs35l45_i2c_remove,
 };
 module_i2c_driver(cs35l45_i2c_driver);

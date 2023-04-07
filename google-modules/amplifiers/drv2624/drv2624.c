@@ -1663,8 +1663,7 @@ static struct attribute_group drv2624_fs_attr_group = {
 	.attrs = drv2624_fs_attrs,
 };
 
-static int drv2624_i2c_probe(struct i2c_client *client,
-			     const struct i2c_device_id *id)
+static int drv2624_i2c_probe(struct i2c_client *client)
 {
 	struct drv2624_data *drv2624;
 	int err = 0;
@@ -1900,7 +1899,7 @@ static struct i2c_driver drv2624_i2c_driver = {
 #endif
 			.pm	= &drv2624_pm_ops,
 			},
-	.probe = drv2624_i2c_probe,
+	.probe_new = drv2624_i2c_probe,
 	.remove = drv2624_i2c_remove,
 	.id_table = drv2624_i2c_id,
 };
