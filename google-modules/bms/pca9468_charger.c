@@ -5117,8 +5117,7 @@ static int pca9468_create_fs_entries(struct pca9468_charger *chip)
 }
 
 
-static int pca9468_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int pca9468_probe(struct i2c_client *client)
 {
 	static char *battery[] = { "pca9468-battery" };
 	struct power_supply_config mains_cfg = {};
@@ -5441,7 +5440,7 @@ static struct i2c_driver pca9468_driver = {
 		.pm = &pca9468_pm_ops,
 #endif
 	},
-	.probe        = pca9468_probe,
+	.probe_new    = pca9468_probe,
 	.remove       = pca9468_remove,
 	.id_table     = pca9468_id,
 };

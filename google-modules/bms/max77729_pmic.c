@@ -1207,8 +1207,7 @@ static struct irq_chip max77729_gpio_irq_chip = {
 /* ----------------------------------------------------------------------- */
 
 
-static int max77729_pmic_probe(struct i2c_client *client,
-			       const struct i2c_device_id *id)
+static int max77729_pmic_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct max77729_pmic_data *data;
@@ -1386,7 +1385,7 @@ static struct i2c_driver max77729_pmic_i2c_driver = {
 		.of_match_table = max77729_pmic_of_match_table,
 	},
 	.id_table = max77729_pmic_id,
-	.probe = max77729_pmic_probe,
+	.probe_new = max77729_pmic_probe,
 	.remove = max77729_pmic_remove,
 };
 

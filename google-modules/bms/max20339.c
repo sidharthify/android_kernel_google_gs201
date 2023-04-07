@@ -390,8 +390,7 @@ static int max20339_setup_irq(struct max20339_ovp *ovp)
 	return ret;
 }
 
-static int max20339_probe(struct i2c_client *client,
-			  const struct i2c_device_id *i2c_id)
+static int max20339_probe(struct i2c_client *client)
 {
 	struct max20339_ovp *ovp;
 	int rc, ret = 0;
@@ -459,7 +458,7 @@ static struct i2c_driver max20339_i2c_driver = {
 		.name = "max20339ovp",
 		.of_match_table = of_match_ptr(max20339_of_match),
 	},
-	.probe = max20339_probe,
+	.probe_new = max20339_probe,
 	.id_table = max20339_id,
 };
 module_i2c_driver(max20339_i2c_driver);

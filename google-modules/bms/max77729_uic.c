@@ -584,8 +584,7 @@ static struct gbms_storage_desc max77729_uic_storage_dsc = {
 	.write = max77729_uic_storage_write,
 };
 
-static int max77729_uic_probe(struct i2c_client *client,
-			      const struct i2c_device_id *id)
+static int max77729_uic_probe(struct i2c_client *client)
 {
 	struct max77729_uic_data *data;
 	struct device *dev = &client->dev;
@@ -727,7 +726,7 @@ static struct i2c_driver max77729_uic_i2c_driver = {
 #endif
 	},
 	.id_table = max77729_uic_id,
-	.probe = max77729_uic_probe,
+	.probe_new = max77729_uic_probe,
 	.remove = max77729_uic_remove,
 };
 
