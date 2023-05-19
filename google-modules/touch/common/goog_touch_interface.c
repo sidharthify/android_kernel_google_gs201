@@ -5165,7 +5165,7 @@ struct goog_touch_interface *goog_touch_interface_probe(
 	}
 
 	if (!gti_class)
-		gti_class = class_create(THIS_MODULE, GTI_NAME);
+		gti_class = class_create(GTI_NAME);
 
 	if (gti && gti_class) {
 		u32 dev_id = gti_dev_num;
