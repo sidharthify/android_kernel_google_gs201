@@ -913,7 +913,7 @@ static int __init aocc_init(void)
 
 	aocc_major_dev = MKDEV(aocc_major, 0);
 
-	aocc_class = class_create(THIS_MODULE, AOCC_CHARDEV_NAME);
+	aocc_class = class_create(AOCC_CHARDEV_NAME);
 	if (!aocc_class) {
 		pr_err("Failed to create class\n");
 		goto fail;

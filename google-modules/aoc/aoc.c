@@ -2146,7 +2146,7 @@ static int init_chardev(struct aoc_prvdata *prvdata)
 
 	aoc_major = MAJOR(prvdata->aoc_devt);
 
-	prvdata->_class = class_create(THIS_MODULE, AOC_CHARDEV_NAME);
+	prvdata->_class = class_create(AOC_CHARDEV_NAME);
 	if (!prvdata->_class) {
 		pr_err("failed to create aoc_class\n");
 		rc = -ENXIO;
