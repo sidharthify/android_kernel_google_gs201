@@ -1663,7 +1663,7 @@ static int __init lwis_register_base_device(void)
 	core.device_major = MAJOR(core.lwis_devt);
 
 	/* Create a device class*/
-	core.dev_class = class_create(THIS_MODULE, LWIS_CLASS_NAME);
+	core.dev_class = class_create(LWIS_CLASS_NAME);
 	if (IS_ERR_OR_NULL(core.dev_class)) {
 		pr_err("Failed to create device class\n");
 		ret = PTR_ERR(core.dev_class);
