@@ -1363,7 +1363,7 @@ static int amcs_init_cdev(struct audiometrics_priv_type *priv)
 
 	priv->amcs_major = MAJOR(priv->amcs_dev);
 
-	priv->class = class_create(THIS_MODULE, AMCS_CDEV_NAME);
+	priv->class = class_create(AMCS_CDEV_NAME);
 	if (!priv->class) {
 		dev_err(&amcs_pdev->dev, "Failed to create amcs class\n");
 		ret = -ENXIO;
