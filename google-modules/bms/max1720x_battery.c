@@ -5476,7 +5476,7 @@ static int max1720x_init_history_device(struct max1720x_chip *chip)
 	if (alloc_chrdev_region(&chip->hcmajor, 0, 1, HISTORY_DEVICENAME) < 0)
 		goto no_history;
 	/* ls /sys/class */
-	chip->hcclass = class_create(THIS_MODULE, HISTORY_DEVICENAME);
+	chip->hcclass = class_create(HISTORY_DEVICENAME);
 	if (chip->hcclass == NULL)
 		goto no_history;
 	/* ls /dev/ */
