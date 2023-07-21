@@ -240,7 +240,7 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_cluster_attr_s {
 typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_svc_id_attr_s {
 	uint8	id;
 	uint16	len;
-	uint8	svcid[0]; /* 6*len of srvc IDs */
+	uint8	svcid[]; /* 6*len of srvc IDs */
 } BWL_POST_PACKED_STRUCT wifi_nan_svc_id_attr_t;
 
 /* service_control bitmap for wifi_nan_svc_descriptor_attr_t below */
@@ -595,7 +595,7 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_chan_entry_s {
 	uint8 oper_class;		/* Operating Class */
 	uint16 chan_bitmap;		/* Channel Bitmap */
 	uint8 primary_chan_bmp;		/* Primary Channel Bitmap */
-	uint8 aux_chan[0];			/* Auxiliary Channel bitmap */
+	uint8 aux_chan[];			/* Auxiliary Channel bitmap */
 } BWL_POST_PACKED_STRUCT wifi_nan_chan_entry_t;
 
 /* Channel entry */
@@ -1722,7 +1722,7 @@ typedef BWL_PRE_PACKED_STRUCT struct wifi_nan_nmsg_attr_s {
 	uint8 mc_id; /* Multicast id similar to NDPID */
 	uint8 nmsg_ctrl; /* NMSG control field */
 	/* Optional publish id, NMSGID and svc info are included in var[] */
-	uint8 var[0];
+	uint8 var[];
 } BWL_POST_PACKED_STRUCT wifi_nan_nmsg_attr_t;
 
 #define NMSG_ATTR_MCAST_SCHED_MAP_ID_MASK     0x1E
