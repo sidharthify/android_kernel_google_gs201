@@ -1108,7 +1108,7 @@ static int of_parse_dai_cpu(struct device *dev,
 	dai->num_cpus = 1;
 	component->of_node = of_node;
 
-	ret = snd_soc_of_get_dai_name(of_cpu_root, &component->dai_name);
+	ret = snd_soc_of_get_dai_name(of_cpu_root, &component->dai_name, 0);
 	if (ret) {
 		if (ret == -EPROBE_DEFER) {
 			pr_info("%s: wait cpu_dai for %s", __func__, dai->name);
