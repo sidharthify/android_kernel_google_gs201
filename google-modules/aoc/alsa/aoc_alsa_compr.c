@@ -12,6 +12,7 @@
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/uio.h>
 #include <linux/version.h>
 
 #include "aoc_alsa.h"
@@ -643,13 +644,18 @@ static int aoc_compr_playback_copy(struct snd_compr_stream *cstream,
 {
 	struct snd_compr_runtime *runtime = cstream->runtime;
 	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
-	int err = 0;
+	int err;
+	struct iov_iter iter;
+
+	err = import_ubuf(ITER_SOURCE, buf, count, &iter);
+	if (err)
+		return err;
 
 	err = aoc_compr_offload_send_metadata(alsa_stream);
 	if (err < 0)
 		pr_err("ERR: %d failed to send metadata\n", err);
 
-	err = aoc_audio_write(alsa_stream, buf, count);
+	err = aoc_audio_write(alsa_stream, &iter, count);
 	if (err < 0) {
 		pr_err("ERR:%d failed to write to buffer\n", err);
 		return err;

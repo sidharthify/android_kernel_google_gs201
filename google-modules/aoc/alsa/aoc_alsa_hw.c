@@ -15,6 +15,8 @@
 #include "aoc_alsa_drv.h"
 #include "aoc_alsa_path.h"
 
+#include <linux/uio.h>
+
 #ifndef ALSA_AOC_CMD_LOG_DISABLE
 static int cmd_count;
 #endif
@@ -3028,13 +3030,14 @@ int aoc_audio_voip_stop(struct aoc_alsa_stream *alsa_stream)
 /* TODO: this function is modified to deal with the issue where ALSA appl_ptr
  * and the reader pointer in AoC ringer buffer are out-of-sync due to overflow
  */
-int aoc_audio_read(struct aoc_alsa_stream *alsa_stream, void *dest,
+int aoc_audio_read(struct aoc_alsa_stream *alsa_stream, struct iov_iter *buf,
 		   uint32_t count)
 {
 	int err = 0;
 	void *tmp;
 	struct aoc_service_dev *dev = alsa_stream->dev;
 	uint32_t avail;
+	size_t copied;
 
 	tmp = (void *)(alsa_stream->substream->runtime->dma_area);
 
@@ -3063,9 +3066,10 @@ int aoc_audio_read(struct aoc_alsa_stream *alsa_stream, void *dest,
 	if (!aoc_online_state(dev))
 		memset(tmp, 0, count);
 
-	err = copy_to_user(dest, tmp, count);
-	if (err != 0) {
-		pr_err("ERR: %d bytes not copied to user space\n", err);
+	copied = copy_to_iter(tmp, count, buf);
+	if (copied != count) {
+		pr_err("ERR: %zu bytes not copied to user space\n",
+		       count - copied);
 		err = -EFAULT;
 	}
 
@@ -3073,7 +3077,7 @@ out:
 	return err < 0 ? err : 0;
 }
 
-int aoc_audio_write(struct aoc_alsa_stream *alsa_stream, void *src,
+int aoc_audio_write(struct aoc_alsa_stream *alsa_stream, struct iov_iter *buf,
 		    uint32_t count)
 {
 	int err = 0;
@@ -3099,15 +3103,18 @@ int aoc_audio_write(struct aoc_alsa_stream *alsa_stream, void *src,
 	}
 
 	while (count > 0) {
+		size_t copied;
+
 		if (count < block_size)
 			block_size = count;
 
 		if (alsa_stream->cstream)
 			pr_debug("compr offload, count: %d, blocksize: %d\n", count, block_size);
 
-		err = copy_from_user(tmp, src, block_size);
-		if (err != 0) {
-			pr_err("ERR: %d bytes not read from user space\n", err);
+		copied = copy_from_iter(tmp, block_size, buf);
+		if (copied != block_size) {
+			pr_err("ERR: %zu bytes not read from user space\n",
+			       block_size - copied);
 			err = -EFAULT;
 			goto out;
 		}
@@ -3119,7 +3126,6 @@ int aoc_audio_write(struct aoc_alsa_stream *alsa_stream, void *src,
 		}
 
 		count -= block_size;
-		src += block_size;
 	}
 
 out:

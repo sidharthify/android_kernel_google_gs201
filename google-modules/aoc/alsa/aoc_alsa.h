@@ -520,9 +520,9 @@ int aoc_set_usb_mem_config(struct aoc_chip *achip);
 
 int aoc_multichannel_processor_switch_set(struct aoc_chip *achip, int value);
 
-int aoc_audio_write(struct aoc_alsa_stream *alsa_stream, void *src,
+int aoc_audio_write(struct aoc_alsa_stream *alsa_stream, struct iov_iter *buf,
 		    uint32_t count);
-int aoc_audio_read(struct aoc_alsa_stream *alsa_stream, void *dest,
+int aoc_audio_read(struct aoc_alsa_stream *alsa_stream, struct iov_iter *buf,
 		   uint32_t count);
 int aoc_audio_volume_set(struct aoc_chip *chip, uint32_t volume,
 			 int src, int dst);
