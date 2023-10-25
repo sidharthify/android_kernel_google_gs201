@@ -1899,7 +1899,7 @@ static struct i2c_driver drv2624_i2c_driver = {
 #endif
 			.pm	= &drv2624_pm_ops,
 			},
-	.probe_new = drv2624_i2c_probe,
+	.probe = drv2624_i2c_probe,
 	.remove = drv2624_i2c_remove,
 	.id_table = drv2624_i2c_id,
 };

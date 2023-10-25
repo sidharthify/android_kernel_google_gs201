@@ -11939,7 +11939,7 @@ static struct i2c_driver cs40l2x_i2c_driver = {
 		.pm = &cs40l2x_pm_ops,
 	},
 	.id_table = cs40l2x_id,
-	.probe_new = cs40l2x_i2c_probe,
+	.probe = cs40l2x_i2c_probe,
 	.remove = cs40l2x_i2c_remove,
 };
 
