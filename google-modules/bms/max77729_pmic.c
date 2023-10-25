@@ -1385,7 +1385,7 @@ static struct i2c_driver max77729_pmic_i2c_driver = {
 		.of_match_table = max77729_pmic_of_match_table,
 	},
 	.id_table = max77729_pmic_id,
-	.probe_new = max77729_pmic_probe,
+	.probe = max77729_pmic_probe,
 	.remove = max77729_pmic_remove,
 };
 

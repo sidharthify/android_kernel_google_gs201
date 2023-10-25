@@ -726,7 +726,7 @@ static struct i2c_driver max77729_uic_i2c_driver = {
 #endif
 	},
 	.id_table = max77729_uic_id,
-	.probe_new = max77729_uic_probe,
+	.probe = max77729_uic_probe,
 	.remove = max77729_uic_remove,
 };
 

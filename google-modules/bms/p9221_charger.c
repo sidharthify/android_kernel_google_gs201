@@ -8553,7 +8553,7 @@ static struct i2c_driver p9221_charger_driver = {
 		.pm		= &p9221_pm_ops,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
-	.probe_new	= p9221_charger_probe,
+	.probe		= p9221_charger_probe,
 	.remove		= p9221_charger_remove,
 	.shutdown	= p9221_charger_shutdown,
 	.id_table	= p9221_charger_id_table,

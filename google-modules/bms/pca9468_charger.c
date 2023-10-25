@@ -5440,7 +5440,7 @@ static struct i2c_driver pca9468_driver = {
 		.pm = &pca9468_pm_ops,
 #endif
 	},
-	.probe_new    = pca9468_probe,
+	.probe        = pca9468_probe,
 	.remove       = pca9468_remove,
 	.id_table     = pca9468_id,
 };
