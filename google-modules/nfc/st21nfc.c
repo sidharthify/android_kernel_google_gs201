@@ -1167,7 +1167,7 @@ static struct i2c_driver st21nfc_driver = {
 		.pm = &st21nfc_pm_ops,
 		.acpi_match_table = ACPI_PTR(st21nfc_acpi_match),
 	},
-	.probe_new	= st21nfc_probe,
+	.probe		= st21nfc_probe,
 	.remove		= st21nfc_remove,
 };
 
