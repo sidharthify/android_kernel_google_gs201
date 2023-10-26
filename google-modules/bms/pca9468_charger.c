@@ -5256,10 +5256,10 @@ static int pca9468_probe(struct i2c_client *client,
 #ifdef CONFIG_THERMAL
 	if (pdata->usb_tz_name) {
 		pca9468_chg->usb_tzd =
-			thermal_zone_device_register(pdata->usb_tz_name, 0, 0,
-						     pca9468_chg,
-						     &pca9468_usb_tzd_ops,
-						     NULL, 0, 0);
+			thermal_tripless_zone_device_register(pdata->usb_tz_name,
+							      pca9468_chg,
+							      &pca9468_usb_tzd_ops,
+							      NULL);
 		if (IS_ERR(pca9468_chg->usb_tzd)) {
 			pca9468_chg->usb_tzd = NULL;
 			ret = PTR_ERR(pca9468_chg->usb_tzd);

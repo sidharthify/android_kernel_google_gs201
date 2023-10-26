@@ -12406,8 +12406,10 @@ static void google_battery_init_work(struct work_struct *work)
 				      &batt_vs_tz_name);
 	if (ret == 0) {
 		batt_drv->batt_vs_tz =
-		    thermal_zone_device_register(batt_vs_tz_name, 0, 0,
-						 batt_drv, &batt_vs_tz_ops, NULL, 0, 0);
+		    thermal_tripless_zone_device_register(batt_vs_tz_name,
+							  batt_drv,
+							  &batt_vs_tz_ops,
+							  NULL);
 		if (IS_ERR(batt_drv->batt_vs_tz)) {
 			pr_err("batt_vs tz register failed. err:%ld\n",
 			       PTR_ERR(batt_drv->batt_vs_tz));
