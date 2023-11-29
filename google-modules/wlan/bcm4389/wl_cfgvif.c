@@ -4256,14 +4256,12 @@ exit:
 	return err;
 }
 
-s32
-wl_cfg80211_change_beacon(
-	struct wiphy *wiphy,
-	struct net_device *dev,
-	struct cfg80211_beacon_data *info)
+int wl_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
+			      struct cfg80211_ap_update *params)
 {
 	s32 err = BCME_OK;
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
+	struct cfg80211_beacon_data *info = &params->beacon;
 	struct parsed_ies ies;
 	u32 dev_role = 0;
 	s32 bssidx = 0;

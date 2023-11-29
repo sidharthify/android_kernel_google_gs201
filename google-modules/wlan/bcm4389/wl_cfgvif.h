@@ -202,8 +202,6 @@ extern s32 wl_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev, unsi
 #else
 extern s32 wl_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev);
 #endif /* LINUX_VERSION_CODE > KERNEL_VERSION(5, 19, 0) || WL_MLO_BKPORT */
-extern s32 wl_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
-	struct cfg80211_beacon_data *info);
 #else
 extern s32 wl_cfg80211_add_set_beacon(struct wiphy *wiphy, struct net_device *dev,
 	struct beacon_parameters *info);
@@ -238,8 +236,9 @@ wl_cfg80211_add_virtual_iface(struct wiphy *wiphy,
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
 	struct vif_params *params);
 extern s32 wl_cfg80211_del_virtual_iface(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev);
-extern s32 wl_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
-	struct cfg80211_beacon_data *info);
+extern s32 wl_cfg80211_change_beacon(struct wiphy *wiphy,
+				     struct net_device *dev,
+				     struct cfg80211_ap_update *params);
 
 extern s32 wl_get_auth_assoc_status(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	const wl_event_msg_t *e, void *data);
