@@ -24761,7 +24761,7 @@ wl_cfg80211_debug_data_dump(struct net_device *dev, u8 *buf, u32 buf_len)
 void
 wl_cfg80211_wdev_lock(struct wireless_dev *wdev)
 {
-	mutex_lock(&wdev->mtx);
+	wiphy_lock(wdev->wiphy);
 	__acquire(wdev->mtx);
 }
 
@@ -24769,7 +24769,7 @@ void
 wl_cfg80211_wdev_unlock(struct wireless_dev *wdev)
 {
 	__release(wdev->mtx);
-	mutex_unlock(&wdev->mtx);
+	wiphy_unlock(wdev->wiphy);
 }
 
 #ifdef WL_CLIENT_SAE
