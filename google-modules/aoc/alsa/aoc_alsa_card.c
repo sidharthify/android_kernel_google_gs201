@@ -350,7 +350,7 @@ static int hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 		hw_param_interval(params, SNDRV_PCM_HW_PARAM_RATE);
 	struct snd_interval *channels =
 		hw_param_interval(params, SNDRV_PCM_HW_PARAM_CHANNELS);
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct aoc_chip *chip =
 		(struct aoc_chip *)snd_soc_card_get_drvdata(rtd->card);
 	struct snd_card_pdata *pdata =
@@ -505,7 +505,7 @@ static int i2s_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_dai *codec_dai;
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 
 	u32 rate, bclk, channel;
 	int i, bit_width, ret;
@@ -554,7 +554,7 @@ static int tdm_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *param)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_dai *codec_dai;
 	struct snd_soc_dai_link *dai_link = rtd->dai_link;
 	u32 rate, bclk, channel, tdmslot;
@@ -1771,7 +1771,7 @@ static void init_backend_control(struct snd_soc_pcm_runtime *rtd, u32 id)
 	    !be_res_map[idx].controls)
 		return;
 
-	cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	snd_soc_add_dai_controls(cpu_dai,
 		 be_res_map[idx].controls, be_res_map[idx].num_controls);
 }
