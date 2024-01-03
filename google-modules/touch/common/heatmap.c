@@ -357,7 +357,7 @@ int heatmap_probe(struct v4l2_heatmap *v4l2)
 
 	/* register video device */
 	strlcpy(v4l2->device.name, dev_name(v4l2->parent_dev),
-		V4L2_DEVICE_NAME_SIZE);
+		sizeof(v4l2->device.name));
 	error = v4l2_device_register(v4l2->parent_dev, &v4l2->device);
 	if (error)
 		goto err_free_frame_storage;
