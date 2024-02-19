@@ -9995,7 +9995,7 @@ static ssize_t dev_sn_store(struct device *dev,
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
 	const size_t max_len = sizeof(batt_drv->dev_sn);
 
-	if (strlcpy(batt_drv->dev_sn, buf, max_len) >= max_len)
+	if (strscpy(batt_drv->dev_sn, buf, max_len) == -E2BIG)
 		pr_warn("Paired data out of bounds\n");
 
 	return count;
