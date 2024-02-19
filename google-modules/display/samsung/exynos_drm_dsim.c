@@ -1687,7 +1687,7 @@ static int dsim_add_mipi_dsi_device(struct dsim_device *dsim,
 				scnprintf(info.type, sizeof(info.type),
 					"%d:%s", idx, name);
 			else
-				strlcpy(info.type, name, sizeof(info.type));
+				strscpy(info.type, name, sizeof(info.type));
 			info.node = of_node_get(node);
 		}
 	}
@@ -3058,7 +3058,7 @@ static ssize_t hs_clock_store(struct device *dev,
 		goto out;
 	}
 
-	strlcpy(params, buf, sizeof(params));
+	strscpy(params, buf, sizeof(params));
 	hs_clk_str = strsep(&p, " ");
 	apply_now_str = strsep(&p, " ");
 
