@@ -1683,7 +1683,7 @@ void trigger_aoc_ssr(bool ap_triggered_reset, char *reset_reason) {
 		} else {
 			configure_crash_interrupts(prvdata, false);
 			if (ap_triggered_reset) {
-				strlcpy(prvdata->ap_reset_reason, reset_reason,
+				strscpy(prvdata->ap_reset_reason, reset_reason,
 					AP_RESET_REASON_LENGTH);
 				prvdata->ap_triggered_reset = true;
 			}
