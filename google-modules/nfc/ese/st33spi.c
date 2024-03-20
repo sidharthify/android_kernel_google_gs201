@@ -172,11 +172,12 @@ static ssize_t st33spi_state_show(struct device *dev,
 
 	st33spi = spi_get_drvdata(spi);
 	if (st33spi == NULL || st33spi->spi == NULL ||
-	    st33spi->spi->cs_gpiod == NULL)
+	    spi_get_csgpiod(st33spi->spi, 0) == NULL)
 		return -ENODEV;
 
 	return scnprintf(buf, PAGE_SIZE, "state:%d, st33spi_cs:%d\n",
-			st33spi->spi_state, gpiod_get_raw_value_cansleep(st33spi->spi->cs_gpiod));
+			st33spi->spi_state,
+			 gpiod_get_raw_value_cansleep(spi_get_csgpiod(st33spi->spi, 0)));
 }
 
 static ssize_t st33spi_state_store(struct device *dev,
