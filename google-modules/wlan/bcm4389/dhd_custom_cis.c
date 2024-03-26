@@ -31,6 +31,7 @@
 #include <ethernet.h>
 #include <dngl_stats.h>
 #include <bcmutils.h>
+#include <bcmstdlib_s.h>
 #include <dhd.h>
 #include <dhd_dbg.h>
 #include <dhd_linux.h>

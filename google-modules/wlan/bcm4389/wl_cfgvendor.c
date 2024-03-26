@@ -34,6 +34,7 @@
 #include <bcmstdlib_s.h>
 
 #include <bcmutils.h>
+#include <bcmstdlib_s.h>
 #include <bcmwifi_channels.h>
 #include <bcmendian.h>
 #include <ethernet.h>

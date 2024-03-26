@@ -50,6 +50,8 @@
 #include <linux/platform_data/sscoredump.h>
 #endif /* DHD_COREDUMP */
 
+#include <bcmstdlib_s.h>
+
 #define EXYNOS_PCIE_VENDOR_ID 0x144d
 #if defined(CONFIG_SOC_GOOGLE)
 #define EXYNOS_PCIE_DEVICE_ID 0xecec
