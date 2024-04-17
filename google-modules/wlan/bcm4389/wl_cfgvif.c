@@ -5572,7 +5572,9 @@ wl_cfg80211_ch_switch_notify(struct net_device *dev, uint16 chanspec, struct wip
 	}
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION (3, 8, 0))
 	freq = chandef.chan ? chandef.chan->center_freq : chandef.center_freq1;
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)) || defined(WL_CH_SWITCH_BKPORT)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)) || defined(WL_CH_SWITCH_BKPORT)
+	cfg80211_ch_switch_notify(dev, &chandef, 0);
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)) || defined(WL_CH_SWITCH_BKPORT)
 	/* force set link_id and pucturing bitmap as 0  */
 	cfg80211_ch_switch_notify(dev, &chandef, 0, 0);
 #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 2)) || defined(WL_MLO_BKPORT)
