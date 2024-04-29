@@ -130,7 +130,6 @@ static int aoc_bus_match(struct device *dev, struct device_driver *drv);
 static int aoc_bus_probe(struct device *dev);
 static void aoc_bus_remove(struct device *dev);
 
-static void aoc_configure_iommu_fault_handler(struct aoc_prvdata *p);
 static void aoc_configure_iommu(struct aoc_prvdata *p, const struct firmware *fw);
 
 static struct bus_type aoc_bus_type = {
@@ -621,7 +620,6 @@ static void aoc_fw_callback(const struct firmware *fw, void *ctx)
 	if (gsa_enabled) {
 		int rc;
 
-		aoc_configure_iommu_fault_handler(prvdata);
 		rc = aoc_fw_authenticate(prvdata, fw);
 		if (rc) {
 			dev_err(dev, "GSA: FW authentication failed: %d\n", rc);
@@ -1207,28 +1205,6 @@ static struct aoc_service_dev *create_service_device(struct aoc_prvdata *prvdata
 	return dev;
 }
 
-static int aoc_iommu_fault_handler(struct iommu_fault *fault, void *token)
-{
-	struct device *dev = token;
-
-	dev_err(dev, "aoc iommu fault: fault->type = %u\n", fault->type);
-	dev_err(dev, "fault->event: reason = %u, flags = %#010x, addr = %#010llx\n",
-		fault->event.reason, fault->event.flags, fault->event.addr);
-	dev_err(dev, "fault->prm: flags = %#010x, addr = %#010llx\n",
-		fault->prm.flags, fault->prm.addr);
-
-	/* Tell the IOMMU driver that the fault is non-fatal. */
-	return -EAGAIN;
-}
-
-static void aoc_configure_iommu_fault_handler(struct aoc_prvdata *p)
-{
-	struct device *dev = p->dev;
-	int rc = iommu_register_device_fault_handler(dev, aoc_iommu_fault_handler, dev);
-
-	if (rc)
-		dev_err(dev, "iommu_register_device_fault_handler failed: rc = %d\n", rc);
-}
 
 static void aoc_configure_iommu(struct aoc_prvdata *p, const struct firmware *fw)
 {
@@ -1244,7 +1220,6 @@ static void aoc_configure_iommu(struct aoc_prvdata *p, const struct firmware *fw
 		return;
 	}
 
-	aoc_configure_iommu_fault_handler(p);
 
 	iommu_offset = _aoc_fw_iommu_offset(fw);
 	iommu_size = _aoc_fw_iommu_size(fw);
