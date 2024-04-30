@@ -62,11 +62,13 @@ int lwis_platform_probe(struct lwis_device *lwis_dev)
 	return 0;
 }
 
-static int lwis_iommu_fault_handler(struct iommu_fault *fault, void *param)
+static int lwis_iommu_fault_handler(struct iommu_domain *domain,
+				    struct device *dev, unsigned long iova,
+				    int flags, void *token)
 {
 	int ret;
 	struct of_phandle_iterator it;
-	struct lwis_device *lwis_dev = (struct lwis_device *)param;
+	struct lwis_device *lwis_dev = token;
 	struct lwis_mem_page_fault_event_payload event_payload;
 
 	pr_err("############ LWIS IOMMU PAGE FAULT ############\n");
@@ -83,7 +85,7 @@ static int lwis_iommu_fault_handler(struct iommu_fault *fault, void *param)
 		pr_err("\n");
 	}
 	pr_err("IOMMU Page Fault at Address: 0x%p Flag: 0x%08x. Check dmesg for sysmmu errors\n",
-	       (void *)fault->event.addr, fault->event.flags);
+	       (void *)iova, flags);
 	pr_err("\n");
 	lwis_debug_print_transaction_info(lwis_dev);
 	pr_err("\n");
@@ -95,8 +97,8 @@ static int lwis_iommu_fault_handler(struct iommu_fault *fault, void *param)
 	pr_err("\n");
 	pr_err("###############################################\n");
 
-	event_payload.fault_address = fault->event.addr;
-	event_payload.fault_flags = fault->event.flags;
+	event_payload.fault_address = iova;
+	event_payload.fault_flags = flags;
 	lwis_device_error_event_emit(lwis_dev, LWIS_ERROR_EVENT_ID_MEMORY_PAGE_FAULT,
 				     &event_payload, sizeof(event_payload));
 
@@ -121,6 +123,7 @@ int lwis_platform_device_enable(struct lwis_device *lwis_dev)
 	int ret;
 	int iommus_len = 0;
 	struct lwis_platform *platform;
+	struct iommu_domain *domain;
 
 	const int core_clock_qos = 67000;
 
@@ -140,12 +143,12 @@ int lwis_platform_device_enable(struct lwis_device *lwis_dev)
 
 	if (of_find_property(lwis_dev->k_dev->of_node, "iommus", &iommus_len) && iommus_len) {
 		/* Activate IOMMU for the platform device */
-		ret = iommu_register_device_fault_handler(lwis_dev->k_dev, lwis_iommu_fault_handler,
-							  lwis_dev);
-		if (ret < 0) {
-			pr_err("Failed to register fault handler for the device: %d\n", ret);
-			return ret;
-		}
+		domain = iommu_get_domain_for_dev(lwis_dev->k_dev);
+		if (domain)
+			/* Used just for logging. */
+			iommu_set_fault_handler(domain,
+						lwis_iommu_fault_handler,
+						lwis_dev);
 	}
 
 	if (lwis_dev->clock_family != CLOCK_FAMILY_INVALID &&
@@ -179,7 +182,6 @@ int lwis_platform_device_enable(struct lwis_device *lwis_dev)
 
 int lwis_platform_device_disable(struct lwis_device *lwis_dev)
 {
-	int iommus_len = 0;
 	struct lwis_platform *platform;
 
 	if (!lwis_dev)
@@ -192,16 +194,7 @@ int lwis_platform_device_disable(struct lwis_device *lwis_dev)
 	if (device_support_bts(lwis_dev) && lwis_dev->bts_scenario_name)
 		bts_del_scenario(lwis_dev->bts_scenario);
 
-	/* We can't remove fault handlers, so there's no call corresponding
-	 * to the iommu_register_device_fault_handler above
-	 */
-
 	lwis_platform_remove_qos(lwis_dev);
-
-	if (of_find_property(lwis_dev->k_dev->of_node, "iommus", &iommus_len) && iommus_len) {
-		/* Deactivate IOMMU */
-		iommu_unregister_device_fault_handler(lwis_dev->k_dev);
-	}
 
 	/* Disable platform device */
 	return pm_runtime_put_sync(lwis_dev->k_dev);
