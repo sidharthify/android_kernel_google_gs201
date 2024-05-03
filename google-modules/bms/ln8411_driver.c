@@ -5465,8 +5465,7 @@ static int ln8411_create_fs_entries(struct ln8411_charger *chip)
 }
 
 
-static int ln8411_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ln8411_probe(struct i2c_client *client)
 {
 	static char *battery[] = { "ln8411-battery" };
 	struct power_supply_config mains_cfg = {};

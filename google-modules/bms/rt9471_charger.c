@@ -2018,8 +2018,7 @@ static int rt9471_register_psy(struct rt9471_chip *chip)
 	return 0;
 }
 
-static int rt9471_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int rt9471_probe(struct i2c_client *client)
 {
 	int ret = 0;
 	struct rt9471_chip *chip = NULL;
