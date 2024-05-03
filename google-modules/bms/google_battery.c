@@ -12423,9 +12423,9 @@ static void google_battery_init_work(struct work_struct *work)
 	}
 
 	/* battery virtual sensor for more power */
-	batt_drv->batt_vs_mp_tz = thermal_zone_device_register("mdis_morepower", 0, 0,
-								batt_drv, &batt_vs_mp_tz_ops,
-								NULL, 0, 0);
+	batt_drv->batt_vs_mp_tz =
+	    thermal_tripless_zone_device_register("mdis_morepower", batt_drv,
+						  &batt_vs_mp_tz_ops, NULL);
 	if (IS_ERR(batt_drv->batt_vs_mp_tz)) {
 		pr_err("batt_vs_mp tz register failed. err: %ld\n",
 			PTR_ERR(batt_drv->batt_vs_mp_tz));
@@ -12434,9 +12434,9 @@ static void google_battery_init_work(struct work_struct *work)
 		thermal_zone_device_update(batt_drv->batt_vs_mp_tz, THERMAL_DEVICE_UP);
 	}
 
-	batt_drv->batt_vs_hda_tz = thermal_zone_device_register("thb_hda", 0, 0,
-								batt_drv, &batt_vs_hda_tz_ops,
-								NULL, 0, 0);
+	batt_drv->batt_vs_hda_tz =
+	    thermal_tripless_zone_device_register("thb_hda", batt_drv,
+						  &batt_vs_hda_tz_ops, NULL);
 	if (IS_ERR(batt_drv->batt_vs_hda_tz)) {
 		pr_err("batt_vs_hda_tz register failed. err: %ld\n",
 			PTR_ERR(batt_drv->batt_vs_hda_tz));

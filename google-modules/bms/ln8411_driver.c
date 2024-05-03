@@ -5605,10 +5605,10 @@ static int ln8411_probe(struct i2c_client *client,
 #if IS_ENABLED(CONFIG_THERMAL)
 	if (pdata->usb_tz_name) {
 		ln8411_charger->usb_tzd =
-			thermal_zone_device_register(pdata->usb_tz_name, 0, 0,
-						     ln8411_charger,
-						     &ln8411_usb_tzd_ops,
-						     NULL, 0, 0);
+		    thermal_tripless_zone_device_register(pdata->usb_tz_name,
+							  ln8411_charger,
+							  &ln8411_usb_tzd_ops,
+							  NULL);
 		if (IS_ERR(ln8411_charger->usb_tzd)) {
 			ln8411_charger->usb_tzd = NULL;
 			ret = PTR_ERR(ln8411_charger->usb_tzd);
