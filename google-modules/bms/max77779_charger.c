@@ -3607,6 +3607,7 @@ int max77779_charger_init(struct max77779_chgr_data *data)
 {
 	struct power_supply_config chgr_psy_cfg = { 0 };
 	struct device *dev = data->dev;
+	struct device_node __maybe_unused *dn;
 	const char *tmp;
 	u32 usb_otg_mv;
 	int ret = 0;
@@ -3733,10 +3734,10 @@ int max77779_charger_init(struct max77779_chgr_data *data)
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	max77779_gpio_init(data);
 	data->gpio.parent = dev;
-	data->gpio.of_node = of_find_node_by_name(dev->of_node,
-							    data->gpio.label);
-	if (!data->gpio.of_node)
+	dn = of_find_node_by_name(dev->of_node, data->gpio.label);
+	if (!dn)
 		dev_warn(dev, "Failed to find %s DT node\n", data->gpio.label);
+	data->gpio.fwnode = of_node_to_fwnode(dn);
 
 	ret = devm_gpiochip_add_data(dev, &data->gpio, data);
 	dev_dbg(dev, "%d GPIOs registered ret: %d\n", data->gpio.ngpio, ret);

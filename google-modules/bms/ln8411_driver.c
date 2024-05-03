@@ -5473,6 +5473,7 @@ static int ln8411_probe(struct i2c_client *client)
 	struct ln8411_charger *ln8411_charger;
 	struct device *dev = &client->dev;
 	const char *psy_name = NULL;
+	struct device_node __maybe_unused *dn;
 	int ret;
 
 	dev_dbg(dev, "%s: =========START=========\n", __func__);
@@ -5592,10 +5593,11 @@ static int ln8411_probe(struct i2c_client *client)
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	ln8411_gpio_init(ln8411_charger);
 	ln8411_charger->gpio.parent = &client->dev;
-	ln8411_charger->gpio.of_node = of_find_node_by_name(client->dev.of_node,
-							    ln8411_charger->gpio.label);
-	if (!ln8411_charger->gpio.of_node)
+	dn = of_find_node_by_name(client->dev.of_node,
+				  ln8411_charger->gpio.label);
+	if (!dn)
 		dev_err(&client->dev, "Failed to find %s DT node\n", ln8411_charger->gpio.label);
+	ln8411_charger->gpio.fwnode = of_node_to_fwnode(dn);
 
 	ret = devm_gpiochip_add_data(&client->dev, &ln8411_charger->gpio, ln8411_charger);
 	dev_info(&client->dev, "%d GPIOs registered ret: %d\n", ln8411_charger->gpio.ngpio, ret);
