@@ -2093,13 +2093,16 @@ static int rt9471_probe(struct i2c_client *client)
 
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	if (chip->dev_id == RT9470_DEVID) {
+		struct device_node *dn;
+
 		rt9471_gpio_init(chip);
 		chip->gpio.parent = chip->dev;
-		chip->gpio.of_node = of_find_node_by_name(client->dev.of_node,
-							  chip->gpio.label);
-		if (!chip->gpio.of_node)
+		dn = of_find_node_by_name(client->dev.of_node,
+					  chip->gpio.label);
+		if (!dn)
 			dev_warn(chip->dev, "Failed to find %s DT node\n",
-				chip->gpio.label);
+				 chip->gpio.label);
+		chip->gpio.fwnode = of_node_to_fwnode(dn);
 
 		ret = devm_gpiochip_add_data(chip->dev, &chip->gpio, chip);
 		dev_info(chip->dev, "%d GPIOs registered ret:%d\n",
