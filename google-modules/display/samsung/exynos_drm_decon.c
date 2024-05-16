@@ -120,7 +120,8 @@ void decon_dump_locked(const struct decon_device *decon, struct drm_printer *p)
 
 	if (!p) {
 		printer = is_console_enabled() ?
-			drm_debug_printer("[drm]") : drm_info_printer(decon->dev);
+			drm_dbg_printer(decon->drm_dev, DRM_UT_DRIVER, "[drm]") :
+			drm_info_printer(decon->dev);
 		pointer = &printer;
 	} else {
 		pointer = p;

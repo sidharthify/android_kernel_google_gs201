@@ -181,7 +181,8 @@ void dsim_dump(struct dsim_device *dsim, struct drm_printer *p)
 
 	if (!p) {
 		printer = is_console_enabled() ?
-			drm_debug_printer("[drm]") : drm_info_printer(dsim->dev);
+			drm_dbg_printer(dsim->encoder.dev, DRM_UT_DRIVER, "[drm]") :
+			drm_info_printer(dsim->dev);
 			pointer = &printer;
 	} else {
 		pointer = p;

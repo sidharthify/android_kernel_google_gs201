@@ -1647,7 +1647,8 @@ bool is_console_enabled(void)
 static void buf_dump_all(const struct decon_device *decon)
 {
 	struct drm_printer p = is_console_enabled() ?
-		drm_debug_printer("[drm]") : drm_info_printer(decon->dev);
+		drm_dbg_printer(decon->drm_dev, DRM_UT_DRIVER, "[drm]") :
+		drm_info_printer(decon->dev);
 	int i;
 
 	for (i = 0; i < decon->dpp_cnt; ++i)
@@ -2167,7 +2168,8 @@ void decon_dump_event_condition(const struct decon_device *decon,
 		enum dpu_event_condition condition)
 {
 	struct drm_printer p = is_console_enabled() ?
-		drm_debug_printer("[drm]") : drm_info_printer(decon->dev);
+		drm_dbg_printer(decon->drm_dev, DRM_UT_DRIVER, "[drm]") :
+		drm_info_printer(decon->dev);
 	u32 print_log_size;
 
 	if (decon_dump_ignore(condition))
