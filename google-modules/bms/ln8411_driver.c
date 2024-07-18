@@ -5232,9 +5232,9 @@ static int of_ln8411_dt(struct device *dev,
 #endif /* CONFIG_OF */
 
 #if IS_ENABLED(CONFIG_THERMAL)
-static int ln8411_usb_tz_read_temp(struct thermal_zone_device *tzd, int *temp)
+static int ln8411_usb_tz_read_temp(struct thermal_zone_device *tz, int *temp)
 {
-	struct ln8411_charger *ln8411 = tzd->devdata;
+	struct ln8411_charger *ln8411 = thermal_zone_device_priv(tz);
 
 	if (!ln8411)
 		return -ENODEV;
