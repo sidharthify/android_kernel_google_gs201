@@ -859,7 +859,7 @@ static inline void batt_update_cycle_count(struct batt_drv *batt_drv)
 
 static int google_battery_tz_get_cycle_count(struct thermal_zone_device *tz, int *cycle_count)
 {
-	struct batt_drv *batt_drv = (struct batt_drv *)tz->devdata;
+	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
 
 	if (!cycle_count) {
 		pr_err("Cycle Count NULL");
@@ -874,9 +874,9 @@ static int google_battery_tz_get_cycle_count(struct thermal_zone_device *tz, int
 	return 0;
 }
 
-static int batt_vs_tz_get(struct thermal_zone_device *tzd, int *batt_vs)
+static int batt_vs_tz_get(struct thermal_zone_device *tz, int *batt_vs)
 {
-	struct batt_drv *batt_drv = tzd->devdata;
+	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
 	int temp, rc;
 	unsigned int ibat;
 	unsigned long vs_tmp;
@@ -1006,9 +1006,9 @@ done:
 	return false;
 }
 
-static int batt_vs_mp_tz_get(struct thermal_zone_device *tzd, int *batt_vs)
+static int batt_vs_mp_tz_get(struct thermal_zone_device *tz, int *batt_vs)
 {
-	struct batt_drv *batt_drv = tzd->devdata;
+	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
 
 	if (!batt_vs)
 		return -EINVAL;
@@ -1034,9 +1034,9 @@ static int hda_tz_cb(struct gvotable_election *el,
 	return 0;
 }
 
-static int batt_vs_hda_tz_get(struct thermal_zone_device *tzd, int *batt_vs)
+static int batt_vs_hda_tz_get(struct thermal_zone_device *tz, int *batt_vs)
 {
-	struct batt_drv *batt_drv = tzd->devdata;
+	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
 
 	if (!batt_vs)
 		return -EINVAL;
