@@ -9,6 +9,7 @@
  * published by the Free Software Foundation.
  */
 
+#include <linux/debugfs.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
