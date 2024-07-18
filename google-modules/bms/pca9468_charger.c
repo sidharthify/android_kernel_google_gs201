@@ -4823,9 +4823,9 @@ static int of_pca9468_dt(struct device *dev,
 #endif /* CONFIG_OF */
 
 #ifdef CONFIG_THERMAL
-static int pca9468_usb_tz_read_temp(struct thermal_zone_device *tzd, int *temp)
+static int pca9468_usb_tz_read_temp(struct thermal_zone_device *tz, int *temp)
 {
-	struct pca9468_charger *pca9468 = tzd->devdata;
+	struct pca9468_charger *pca9468 = thermal_zone_device_priv(tz);
 
 	if (!pca9468)
 		return -ENODEV;
