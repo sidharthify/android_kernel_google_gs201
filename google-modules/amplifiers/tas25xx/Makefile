@@ -1,5 +1,4 @@
-ccflags-y += -I$(srctree)/$(src)/inc/
-ccflags-y += -I$(src)
+ccflags-y += -I$(src)/inc/
 
 obj-$(CONFIG_SND_SOC_TAS25XX) += snd-soc-tas25xx.o
 
