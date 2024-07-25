@@ -18,6 +18,7 @@
 #include <linux/sched/clock.h>
 #include <linux/sysfs.h>
 #include <linux/time.h>
+#include <linux/vmalloc.h>
 #include <video/mipi_display.h>
 #include <drm/drm_print.h>
 #include <drm/drm_managed.h>
