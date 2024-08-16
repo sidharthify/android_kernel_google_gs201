@@ -1451,7 +1451,7 @@ err_amcs_init_cdev:
 	return err;
 }
 
-static int audiometrics_platform_remove(struct platform_device *pdev)
+static void audiometrics_platform_remove(struct platform_device *pdev)
 {
 	struct audiometrics_priv_type *priv = dev_get_drvdata(&pdev->dev);
 
@@ -1459,7 +1459,6 @@ static int audiometrics_platform_remove(struct platform_device *pdev)
 	sysfs_remove_group(&pdev->dev.kobj, &audiometrics_fs_attr_group);
 	mutex_destroy(&priv->lock);
 	devm_kfree(&pdev->dev, priv);
-	return 0;
 }
 
 struct platform_driver audiometrics_driver = {

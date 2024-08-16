@@ -1232,15 +1232,13 @@ static int cs40l26_codec_driver_probe(struct platform_device *pdev)
 	return error;
 }
 
-static int cs40l26_codec_driver_remove(struct platform_device *pdev)
+static void cs40l26_codec_driver_remove(struct platform_device *pdev)
 {
 	struct cs40l26_codec *codec = dev_get_drvdata(&pdev->dev);
 
 	pm_runtime_disable(codec->dev);
 
 	snd_soc_unregister_component(codec->dev);
-
-	return 0;
 }
 
 static struct platform_driver cs40l26_codec_driver = {
