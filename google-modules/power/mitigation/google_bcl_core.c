@@ -2434,7 +2434,7 @@ bcl_soc_probe_exit:
 	return 0;
 }
 
-static int google_bcl_remove(struct platform_device *pdev)
+static void google_bcl_remove(struct platform_device *pdev)
 {
 	struct bcl_device *bcl_dev = platform_get_drvdata(pdev);
 
@@ -2443,8 +2443,6 @@ static int google_bcl_remove(struct platform_device *pdev)
 	cpu_pm_unregister_notifier(&bcl_dev->cpu_nb);
 	google_bcl_remove_thermal(bcl_dev);
 	wakeup_source_unregister(bcl_dev->ws);
-
-	return 0;
 }
 
 static void google_bcl_shutdown(struct platform_device *pdev)
