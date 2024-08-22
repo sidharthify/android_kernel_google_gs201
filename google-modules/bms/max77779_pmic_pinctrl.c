@@ -267,9 +267,9 @@ static int max77779_pinctrl_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int max77779_pinctrl_remove(struct platform_device *pdev)
+static void max77779_pinctrl_remove(struct platform_device *pdev)
 {
-	return 0;
+	return;
 }
 
 static const struct platform_device_id max77779_pinctrl_id[] = {

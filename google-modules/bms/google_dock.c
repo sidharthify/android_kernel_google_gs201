@@ -667,12 +667,12 @@ static int google_dock_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int google_dock_remove(struct platform_device *pdev)
+static void google_dock_remove(struct platform_device *pdev)
 {
 	struct dock_drv *dock = platform_get_drvdata(pdev);
 
 	if (!dock)
-		return 0;
+		return;
 
 	power_supply_unreg_notifier(&dock->nb);
 	cancel_delayed_work(&dock->init_work);
@@ -681,8 +681,6 @@ static int google_dock_remove(struct platform_device *pdev)
 	alarm_try_to_cancel(&dock->icl_ramp_alarm);
 	cancel_delayed_work(&dock->detect_work);
 	wakeup_source_unregister(dock->detect_ws);
-
-	return 0;
 }
 
 static void google_dock_shutdown(struct platform_device *pdev)

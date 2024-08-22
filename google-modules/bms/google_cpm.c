@@ -4751,13 +4751,13 @@ static int google_cpm_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int google_cpm_remove(struct platform_device *pdev)
+static void google_cpm_remove(struct platform_device *pdev)
 {
 	struct gcpm_drv *gcpm = platform_get_drvdata(pdev);
 	int i;
 
 	if (!gcpm)
-		return 0;
+		return;
 
 	power_supply_unreg_notifier(&gcpm->chg_nb);
 
@@ -4780,8 +4780,6 @@ static int google_cpm_remove(struct platform_device *pdev)
 		power_supply_put(gcpm->wlc_dc_psy);
 	if (gcpm->log)
 		logbuffer_unregister(gcpm->log);
-
-	return 0;
 }
 
 static void google_cpm_shutdown(struct platform_device *pdev)

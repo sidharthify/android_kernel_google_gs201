@@ -5944,7 +5944,7 @@ static int google_charger_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int google_charger_remove(struct platform_device *pdev)
+static void google_charger_remove(struct platform_device *pdev)
 {
 	struct chg_drv *chg_drv = (struct chg_drv *)platform_get_drvdata(pdev);
 
@@ -5981,8 +5981,6 @@ static int google_charger_remove(struct platform_device *pdev)
 		if (chg_drv->bd_state.bd_log)
 			logbuffer_unregister(chg_drv->bd_state.bd_log);
 	}
-
-	return 0;
 }
 
 static void google_charger_shutdown(struct platform_device *pdev)
