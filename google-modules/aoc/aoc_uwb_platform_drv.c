@@ -118,11 +118,6 @@ static int aoc_uwb_pdrv_probe(struct platform_device *pdev)
 	return uwb_pdrv_pin_init(pdev);
 }
 
-static int aoc_uwb_pdrv_remove(struct platform_device *pdev)
-{
-	return 0;
-}
-
 static const struct of_device_id aoc_match[] = {
 	{
 		.compatible = "google,aoc_uwb_rst",
@@ -138,7 +133,6 @@ static struct platform_driver aoc_uwb_pdrv = {
 		.of_match_table = of_match_ptr(aoc_match)
 	},
 	.probe = aoc_uwb_pdrv_probe,
-	.remove = aoc_uwb_pdrv_remove,
 };
 
 module_platform_driver(aoc_uwb_pdrv);
