@@ -28,7 +28,6 @@
 #include "google_bms.h"
 #include "google_psy.h"
 
-#define MAX(x, y)	((x) < (y) ? (y) : (x))
 #define DUAL_FG_DELAY_INIT_MS	500
 #define DUAL_FG_WORK_PERIOD_MS	10000
 #define DUAL_BATT_TEMP_VOTER	"daul_batt_temp"
@@ -329,7 +328,7 @@ static int gdbatt_get_dual_vbatt(struct dual_fg_drv *dual_fg_drv,
 	}
 	else {
 		/* use the max of base and flip vbatt as battery voltage */
-		dual_vbatt = MAX(base_vbatt, sec_vbatt);
+		dual_vbatt = max(base_vbatt, sec_vbatt);
 	}
 
 	return dual_vbatt;
@@ -707,11 +706,11 @@ static int gdbatt_get_property(struct power_supply *psy,
 		val->intval = fg_1.intval + fg_2.intval;
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-		val->intval = MAX(fg_1.intval, fg_2.intval);
+		val->intval = max(fg_1.intval, fg_2.intval);
 		break;
 	case POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG:
 	case POWER_SUPPLY_PROP_TIME_TO_FULL_AVG:
-		val->intval = MAX(fg_1.intval, fg_2.intval);
+		val->intval = max(fg_1.intval, fg_2.intval);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		val->intval = gdbatt_get_dual_vbatt(dual_fg_drv, fg_1.intval, fg_2.intval);
@@ -727,7 +726,7 @@ static int gdbatt_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		/* larger one is bad. TODO: confirm its priority */
-		val->intval = MAX(fg_1.intval, fg_2.intval);
+		val->intval = max(fg_1.intval, fg_2.intval);
 		break;
 	case POWER_SUPPLY_PROP_STATUS:
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
