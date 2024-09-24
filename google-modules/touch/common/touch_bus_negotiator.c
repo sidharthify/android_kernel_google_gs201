@@ -485,7 +485,7 @@ static int tbn_probe(struct platform_device *pdev)
 		tbn->aoc2ap_gpio = of_get_named_gpio(np, "tbn,aoc2ap_gpio", 0);
 		if (gpio_is_valid(tbn->aoc2ap_gpio)) {
 			err = devm_gpio_request_one(tbn->dev, tbn->aoc2ap_gpio,
-				GPIOF_DIR_IN, "tbn,aoc2ap_gpio");
+				GPIOF_IN, "tbn,aoc2ap_gpio");
 			if (err) {
 				pr_err("%s: Unable to request aoc2ap_gpio %d, err %d!\n",
 					__func__, tbn->aoc2ap_gpio, err);
