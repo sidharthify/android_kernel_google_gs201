@@ -1408,7 +1408,7 @@ static int rt9471_parse_dt(struct rt9471_chip *chip)
 	struct rt9471_desc *desc = NULL;
 	const char *name = NULL;
 	char *ceb_name = NULL;
-	unsigned long init_flags = GPIOF_DIR_OUT;
+	unsigned long init_flags = GPIOF_OUT_INIT_LOW;
 
 	dev_info(chip->dev, "%s\n", __func__);
 
