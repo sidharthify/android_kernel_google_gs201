@@ -182,7 +182,7 @@ static int max20339_init_regs(struct regmap *regmap, struct device *dev)
 static int max20339_gpio_get_direction(struct gpio_chip *chip,
 				       unsigned int offset)
 {
-	return GPIOF_DIR_OUT;
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static bool max20339_is_lsw_closed(struct max20339_ovp *ovp, int offset)
