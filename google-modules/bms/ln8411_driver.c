@@ -4752,7 +4752,7 @@ error:
 #if IS_ENABLED(CONFIG_GPIOLIB)
 static int ln8411_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
 {
-	return GPIOF_DIR_OUT;
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static int ln8411_gpio_get(struct gpio_chip *chip, unsigned int offset)
