@@ -1005,6 +1005,7 @@ static const struct drm_ioctl_desc exynos_ioctls[] = {
 
 static const struct file_operations exynos_drm_driver_fops = {
 	.owner		= THIS_MODULE,
+	.fop_flags	= FOP_UNSIGNED_OFFSET,
 	.open		= drm_open,
 	.mmap		= exynos_drm_gem_mmap,
 	.poll		= drm_poll,
