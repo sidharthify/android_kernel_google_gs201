@@ -1191,10 +1191,6 @@ static int of_parse_one_dai(struct device_node *node, struct device *dev,
 			dai->trigger[0] = SND_SOC_DPCM_TRIGGER_POST;
 			dai->trigger[1] = SND_SOC_DPCM_TRIGGER_POST;
 			break;
-		case 2:
-			dai->trigger[0] = SND_SOC_DPCM_TRIGGER_BESPOKE;
-			dai->trigger[1] = SND_SOC_DPCM_TRIGGER_BESPOKE;
-			break;
 		default:
 			dai->trigger[0] = SND_SOC_DPCM_TRIGGER_PRE;
 			dai->trigger[1] = SND_SOC_DPCM_TRIGGER_PRE;
