@@ -937,16 +937,16 @@ static void max77759_gpio_set(struct gpio_chip *chip,
 	}
 
 	if (offset == MAX77759_GPIO5_OFF) {
-		dir = !(val & MAX77759_GPIO5_DIR_MASK);
-		if (dir != GPIOF_DIR_OUT)  {
+		dir = val & MAX77759_GPIO5_DIR_MASK;
+		if (dir != MAX77759_GPIO5_DIR(MAX77759_GPIO_DIR_OUT))  {
 			dev_err(data->dev, "not output\n");
 			return;
 		}
 		new_val = val & ~MAX77759_GPIO5_VAL_MASK;
 		new_val |= MAX77759_GPIO5_VAL(value);
 	} else {  /* MAX77759_GPIO6_OFF */
-		dir = !(val & MAX77759_GPIO6_DIR_MASK);
-		if (dir != GPIOF_DIR_OUT)  {
+		dir = val & MAX77759_GPIO6_DIR_MASK;
+		if (dir != MAX77759_GPIO6_DIR(MAX77759_GPIO_DIR_OUT))  {
 			dev_err(data->dev, "not output\n");
 			return;
 		}
