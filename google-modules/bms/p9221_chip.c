@@ -3085,7 +3085,7 @@ int p9xxx_gpio_set_value(struct p9221_charger_data *chgr, int gpio, int value)
 static int p9xxx_gpio_get_direction(struct gpio_chip *chip,
 				    unsigned int offset)
 {
-	return GPIOF_DIR_OUT;
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static int p9xxx_gpio_get(struct gpio_chip *chip, unsigned int offset)
