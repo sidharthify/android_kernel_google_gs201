@@ -1723,7 +1723,7 @@ static void max77759_wcin_inlim_work_en(struct max77759_chgr_data *data, bool en
 #if IS_ENABLED(CONFIG_GPIOLIB)
 static int max77759_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
 {
-	return GPIOF_DIR_OUT;
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static int max77759_gpio_get(struct gpio_chip *chip, unsigned int offset)
