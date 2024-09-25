@@ -4386,11 +4386,6 @@ static int gcpm_pps_psy_is_writeable(struct power_supply *psy,
 	return 0;
 }
 
-static enum power_supply_usb_type gcpm_pps_usb_types[] = {
-	POWER_SUPPLY_USB_TYPE_UNKNOWN,
-	POWER_SUPPLY_USB_TYPE_PD_PPS
-};
-
 static const struct power_supply_desc gcpm_pps_psy_desc = {
 	.name		= "gcpm_pps",
 	.type		= POWER_SUPPLY_TYPE_UNKNOWN,
@@ -4399,10 +4394,8 @@ static const struct power_supply_desc gcpm_pps_psy_desc = {
 	.properties	= gcpm_pps_psy_properties,
 	.property_is_writeable = gcpm_pps_psy_is_writeable,
 	.num_properties	= ARRAY_SIZE(gcpm_pps_psy_properties),
-
-	/* POWER_SUPPLY_PROP_USB_TYPE requires an array of these */
-	.usb_types	= gcpm_pps_usb_types,
-	.num_usb_types	= ARRAY_SIZE(gcpm_pps_usb_types),
+	.usb_types	= BIT(POWER_SUPPLY_USB_TYPE_UNKNOWN) |
+			  BIT(POWER_SUPPLY_USB_TYPE_PD_PPS),
 };
 
 /* ------------------------------------------------------------------------- */
