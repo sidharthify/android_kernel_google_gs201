@@ -946,7 +946,6 @@ static const struct file_operations st33spi_fops = {
 	.compat_ioctl = st33spi_compat_ioctl,
 	.open = st33spi_open,
 	.release = st33spi_release,
-	.llseek = no_llseek,
 };
 
 /*-------------------------------------------------------------------------*/
