@@ -291,8 +291,8 @@ static int dhdpcie_smmu_init(struct pci_dev *pdev, void *smmu_cxt)
 	struct device_node *root_node = NULL;
 	dhdpcie_smmu_info_t *smmu_info = (dhdpcie_smmu_info_t *)smmu_cxt;
 	int smmu_iova_address[2];
-	char *wlan_node = "android,bcmdhd_wlan";
-	char *wlan_smmu_node = "wlan-smmu-iova-address";
+	const char *wlan_node = "android,bcmdhd_wlan";
+	const char *wlan_smmu_node = "wlan-smmu-iova-address";
 	int atomic_ctx = 1;
 	int s1_bypass = 1;
 	int ret = 0;

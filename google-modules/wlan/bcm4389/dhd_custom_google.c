@@ -519,7 +519,7 @@ dhd_wifi_init_gpio(void)
 {
 	int gpio_reg_on_val;
 	/* ========== WLAN_PWR_EN ============ */
-	char *wlan_node = DHD_DT_COMPAT_ENTRY;
+	const char *wlan_node = DHD_DT_COMPAT_ENTRY;
 	struct device_node *root_node = NULL;
 
 	root_node = of_find_compatible_node(NULL, NULL, wlan_node);
@@ -639,7 +639,7 @@ dhd_wlan_set_carddetect(int val)
 {
 #ifdef EXYNOS_PCIE_RC_ONOFF
 	struct device_node *root_node = NULL;
-	char *wlan_node = DHD_DT_COMPAT_ENTRY;
+	const char *wlan_node = DHD_DT_COMPAT_ENTRY;
 
 	root_node = of_find_compatible_node(NULL, NULL, wlan_node);
 	if (!root_node) {
