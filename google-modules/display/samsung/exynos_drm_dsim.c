@@ -13,8 +13,6 @@
 
 #define pr_fmt(fmt)  "%s: " fmt, __func__
 
-#include <asm/unaligned.h>
-
 #include <drm/drm_of.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_panel.h>
