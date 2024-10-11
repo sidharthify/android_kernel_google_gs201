@@ -29,7 +29,7 @@ void lwis_ioreg_list_free(struct lwis_ioreg_device *ioreg_dev);
 /*
  *  lwis_ioreg_get: Setup the content of a lwis_ioreg entry.
  */
-int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, char *name);
+int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, const char *name);
 
 /*
  *  lwis_ioreg_put_by_idx: Deinitialize the content of a lwis_ioreg entry

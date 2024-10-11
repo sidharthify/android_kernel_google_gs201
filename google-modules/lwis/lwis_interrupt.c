@@ -112,7 +112,7 @@ void lwis_interrupt_list_free(struct lwis_interrupt_list *list)
 	kfree(list->irq);
 }
 
-int lwis_interrupt_init(struct lwis_interrupt_list *list, int index, char *name)
+int lwis_interrupt_init(struct lwis_interrupt_list *list, int index, const char *name)
 {
 	if (!list || index < 0 || index >= list->count)
 		return -EINVAL;
@@ -167,7 +167,7 @@ int lwis_interrupt_get(struct lwis_interrupt_list *list, int index,
 	return 0;
 }
 
-int lwis_interrupt_get_gpio_irq(struct lwis_interrupt_list *list, int index, char *name,
+int lwis_interrupt_get_gpio_irq(struct lwis_interrupt_list *list, int index, const char *name,
 				int gpio_irq, int32_t irq_gpios_types)
 {
 	int ret = 0;

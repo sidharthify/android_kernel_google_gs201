@@ -117,7 +117,7 @@ void lwis_ioreg_list_free(struct lwis_ioreg_device *ioreg_dev)
 	list->count = 0;
 }
 
-int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, char *name)
+int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, const char *name)
 {
 	struct resource *res;
 	struct lwis_ioreg *block;

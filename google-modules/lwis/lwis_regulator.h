@@ -39,8 +39,8 @@ void lwis_regulator_list_free(struct lwis_regulator_list *list);
  *  lwis_regulator_get: Register the regulator by name.
  *  Returns: index number (>= 0) if success, -ve if error
  */
-int lwis_regulator_get(struct lwis_regulator_list *list, char *name, int voltage,
-		       struct device *dev);
+int lwis_regulator_get(struct lwis_regulator_list *list, const char *name,
+		       int voltage, struct device *dev);
 
 /*
  *  lwis_regulator_put_by_idx: Unregister the regulator by index.

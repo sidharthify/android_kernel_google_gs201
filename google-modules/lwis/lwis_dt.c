@@ -319,7 +319,7 @@ static int parse_clocks(struct lwis_device *lwis_dev)
 		ret = of_property_read_u32_index(dev_node, "clock-rates", i, &rate);
 		rate = (ret == 0) ? rate : 0;
 
-		ret = lwis_clock_get(lwis_dev->clocks, (char *)name, dev, rate);
+		ret = lwis_clock_get(lwis_dev->clocks, name, dev, rate);
 		if (ret < 0) {
 			pr_err("Cannot find clock: %s\n", name);
 			goto error_parse_clk;
@@ -653,7 +653,7 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 
 	for (i = 0; i < count; ++i) {
 		of_property_read_string_index(dev_node, "interrupt-names", i, &name);
-		ret = lwis_interrupt_init(lwis_dev->irqs, i, (char *)name);
+		ret = lwis_interrupt_init(lwis_dev->irqs, i, name);
 		if (ret) {
 			pr_err("Cannot initialize irq %s\n", name);
 			goto error_get_irq;
@@ -839,7 +839,7 @@ static int parse_phys(struct lwis_device *lwis_dev)
 
 	for (i = 0; i < count; ++i) {
 		of_property_read_string_index(dev_node, "phy-names", i, &name);
-		ret = lwis_phy_get(lwis_dev->phys, (char *)name, dev);
+		ret = lwis_phy_get(lwis_dev->phys, name, dev);
 		if (ret < 0) {
 			pr_err("Error adding PHY[%d]\n", i);
 			goto error_parse_phy;
@@ -1413,7 +1413,7 @@ int lwis_ioreg_device_parse_dt(struct lwis_ioreg_device *ioreg_dev)
 
 	for (i = 0; i < blocks; ++i) {
 		of_property_read_string_index(dev_node, "reg-names", i, &name);
-		ret = lwis_ioreg_get(ioreg_dev, i, (char *)name);
+		ret = lwis_ioreg_get(ioreg_dev, i, name);
 		if (ret) {
 			dev_err(ioreg_dev->base_dev.dev, "Cannot set ioreg info for %s\n", name);
 			goto error_ioreg;

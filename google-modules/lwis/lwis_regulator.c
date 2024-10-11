@@ -43,8 +43,8 @@ void lwis_regulator_list_free(struct lwis_regulator_list *list)
 	kfree(list);
 }
 
-int lwis_regulator_get(struct lwis_regulator_list *list, char *name, int voltage,
-		       struct device *dev)
+int lwis_regulator_get(struct lwis_regulator_list *list, const char *name,
+		       int voltage, struct device *dev)
 {
 	struct regulator *reg;
 	int i;
