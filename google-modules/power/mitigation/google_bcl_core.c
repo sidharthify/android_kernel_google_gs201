@@ -29,17 +29,15 @@
 #include <linux/mutex.h>
 #include <linux/power_supply.h>
 #include <linux/thermal.h>
+#include <soc/google/odpm.h>
 #if IS_ENABLED(CONFIG_REGULATOR_S2MPG14)
 #include <dt-bindings/interrupt-controller/zuma.h>
-#include <soc/google/odpm.h>
 #elif IS_ENABLED(CONFIG_REGULATOR_S2MPG10)
 #include <dt-bindings/interrupt-controller/gs101.h>
-#include <soc/google/odpm-whi.h>
 #include <linux/mfd/samsung/s2mpg10.h>
 #include <linux/mfd/samsung/s2mpg11.h>
 #elif IS_ENABLED(CONFIG_REGULATOR_S2MPG12)
 #include <dt-bindings/interrupt-controller/gs201.h>
-#include <soc/google/odpm-whi.h>
 #include <linux/mfd/samsung/s2mpg12.h>
 #include <linux/mfd/samsung/s2mpg13.h>
 #endif
