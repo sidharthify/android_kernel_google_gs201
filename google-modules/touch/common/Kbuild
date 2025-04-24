@@ -12,3 +12,5 @@ obj-$(CONFIG_TOUCHSCREEN_HEATMAP)	+= heatmap.o
 obj-$(CONFIG_TOUCHSCREEN_OFFLOAD)	+= touch_offload.o
 obj-$(CONFIG_GOOG_TOUCH_INTERFACE)	+= goog_touch_interface.o
 
+
+include $(srctree)/google-modules/soc/gs/Makefile.include
