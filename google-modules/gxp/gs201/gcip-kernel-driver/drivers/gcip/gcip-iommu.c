@@ -1334,3 +1334,4 @@ void gcip_iommu_unmap(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t 
 }
 
 MODULE_IMPORT_NS(DMA_BUF);
+MODULE_LICENSE("GPL v2");
