@@ -44,6 +44,48 @@ enum pon_reboot_mode {
 	REBOOT_MODE_RECOVERY		= 0xFF,
 };
 
+enum reboot_cmd {
+    CMD_CHARGE,
+    CMD_BOOTLOADER,
+    CMD_FASTBOOT,
+    CMD_RECOVERY,
+    CMD_DM_VERITY_CORRUPTED,
+    CMD_RESCUE,
+    CMD_SHUTDOWN_THERMAL,
+    CMD_REBOOT_AB_UPDATE,
+    CMD_NORMAL,
+    CMD_UNKNOWN,
+};
+
+enum reboot_cmd parse_cmd(const char* cmd) {
+    if (!strcmp(cmd, "charge"))
+        return CMD_CHARGE;
+    if (!strcmp(cmd, "bootloader"))
+        return CMD_BOOTLOADER;
+    if (!strcmp(cmd, "fastboot"))
+        return CMD_FASTBOOT;
+    if (!strcmp(cmd, "recovery"))
+        return CMD_RECOVERY;
+    if (!strcmp(cmd, "dm-verity device corrupted"))
+        return CMD_DM_VERITY_CORRUPTED;
+    if (!strcmp(cmd, "rescue"))
+        return CMD_RESCUE;
+    if (!strcmp(cmd, "reboot-ab-update"))
+        return CMD_REBOOT_AB_UPDATE;
+    if (!strncmp(cmd, "shutdown-thermal", strlen("shutdown-thermal")) ||
+        !strncmp(cmd, "shutdown,thermal", strlen("shutdown,thermal")))
+        return CMD_SHUTDOWN_THERMAL;
+    if (!strcmp(cmd, "from_fastboot") ||
+        !strcmp(cmd, "shell") ||
+        !strcmp(cmd, "userrequested") ||
+        !strcmp(cmd, "userrequested,fastboot") ||
+        !strcmp(cmd, "userrequested,recovery") ||
+        !strcmp(cmd, "userrequested,recovery,ui"))
+        return CMD_NORMAL;
+
+    return CMD_UNKNOWN;
+}
+
 static void pixel_reboot_mode_set(u32 val)
 {
 	int ret;
@@ -70,36 +112,40 @@ static void pixel_reboot_parse(const char *cmd)
 		bool force_warm_reboot = false;
 
 		pr_info("Reboot command: '%s'\n", cmd);
+                enum reboot_cmd c = parse_cmd(cmd);
 
-		if (!strcmp(cmd, "charge")) {
-			value = REBOOT_MODE_CHARGE;
-		} else if (!strcmp(cmd, "bootloader")) {
-			value = REBOOT_MODE_BOOTLOADER;
-		} else if (!strcmp(cmd, "fastboot")) {
-			value = REBOOT_MODE_FASTBOOT;
-		} else if (!strcmp(cmd, "recovery")) {
-			value = REBOOT_MODE_RECOVERY;
-		} else if (!strcmp(cmd, "dm-verity device corrupted")) {
-			value = REBOOT_MODE_DMVERITY_CORRUPTED;
-		} else if (!strcmp(cmd, "rescue")) {
-			value = REBOOT_MODE_RESCUE;
-		} else if (!strncmp(cmd, "shutdown-thermal", strlen("shutdown-thermal")) ||
-			   !strncmp(cmd, "shutdown,thermal", strlen("shutdown,thermal"))) {
-			if (force_warm_reboot_on_thermal_shutdown)
-				force_warm_reboot = true;
-			value = REBOOT_MODE_SHUTDOWN_THERMAL;
-		} else if (!strcmp(cmd, "reboot-ab-update")) {
-			value = REBOOT_MODE_AB_UPDATE;
-		} else if (!strcmp(cmd, "from_fastboot") ||
-			   !strcmp(cmd, "shell") ||
-			   !strcmp(cmd, "userrequested") ||
-			   !strcmp(cmd, "userrequested,fastboot") ||
-			   !strcmp(cmd, "userrequested,recovery") ||
-			   !strcmp(cmd, "userrequested,recovery,ui")) {
-			value = REBOOT_MODE_NORMAL;
-		} else {
-			pr_err("Unknown reboot command: '%s'\n", cmd);
-		}
+        switch(c) {
+            case CMD_CHARGE:
+                value = REBOOT_MODE_CHARGE;
+                break;
+            case CMD_BOOTLOADER:
+                value = REBOOT_MODE_BOOTLOADER;
+                break;
+            case CMD_FASTBOOT:
+                value = REBOOT_MODE_FASTBOOT;
+                break;
+            case CMD_RECOVERY:
+                value = REBOOT_MODE_RECOVERY;
+                break;
+            case CMD_DM_VERITY_CORRUPTED:
+                value = REBOOT_MODE_DMVERITY_CORRUPTED;
+                break;
+            case CMD_RESCUE:
+                value = REBOOT_MODE_RESCUE;
+                break;
+            case CMD_SHUTDOWN_THERMAL:
+                if (force_warm_reboot_on_thermal_shutdown)
+                    force_warm_reboot = true;
+                value = REBOOT_MODE_SHUTDOWN_THERMAL;
+                break;
+            case CMD_NORMAL:
+                value = REBOOT_MODE_NORMAL;
+                break;
+            case CMD_UNKNOWN:
+            default:
+                pr_err("Unknown reboot command: %s\n", cmd);
+                break;
+        }
 
 		/* check for warm_reboot */
 		if (force_warm_reboot)
