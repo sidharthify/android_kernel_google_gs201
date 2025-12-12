@@ -94,7 +94,6 @@ s2mpg12-mfd.ko
 s2mpg13-mfd.ko
 samsung_dma_heap.ko
 ufs-exynos-gs.ko
-ufs-pixel-fips140.ko
 spi-s3c64xx.ko
 dwc3-exynos-usb.ko
 xhci-exynos.ko
