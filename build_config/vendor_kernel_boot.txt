@@ -130,7 +130,6 @@ gs_perf_mon.ko
 gs_governor_memlat.ko
 gs_governor_utils.ko
 bts.ko
-zram.ko
 zram_gs.ko
 zcomp_cpu.ko
 zcomp_eh.ko
@@ -173,8 +172,6 @@ panel-samsung-sofef01.ko
 panel-samsung-s6e3hc3.ko
 panel-samsung-s6e3hc3-c10.ko
 panel-samsung-s6e3hc4.ko
-panel-samsung-s6e3fc3-l10.ko
-panel-samsung-s6e3fc5.ko
 panel-boe-nt37290.ko
 exynos-drm.ko
 exynos-drm-audio.ko
