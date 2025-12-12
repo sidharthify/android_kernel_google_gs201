@@ -37,7 +37,7 @@ enum {
 };
 
 typedef int (*pdm_callback)(void* priv, int index);
-#if IS_ENABLED(CONFIG_AUDIOMETRICS)
+#if 1
 extern void pdm_callback_register(pdm_callback callback, int pdm_number, void* pdm_priv);
 #else
 static inline
