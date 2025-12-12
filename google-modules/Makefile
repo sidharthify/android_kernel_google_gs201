@@ -12,6 +12,7 @@ obj-y += amplifiers/cs35l45/
 obj-y += amplifiers/cs40l26/
 obj-y += amplifiers/drv2624/
 obj-y += amplifiers/snd_soc_wm_adsp/
+obj-y += amplifiers/audiometrics/
 obj-y += aoc/
 obj-y += aoc/alsa/
 obj-y += aoc/usb/
