@@ -2181,8 +2181,12 @@ static ssize_t proc_LPTW_setting_write(
     char tmpbuf[PROC_BUF_SIZE] = {0};
 
     int buflen = count;
-    int lptw_write_data[FTS_LPTW_BUF_LEN] = {0};
-    u8  write_data[FTS_LPTW_BUF_LEN] = {0};
+
+    int lptw_write_data[FTS_LPTW_BUF_LEN];
+    memset(lptw_write_data, 0, sizeof(lptw_write_data));
+
+    u8 write_data[FTS_LPTW_BUF_LEN];
+    memset(write_data, 0, sizeof(write_data));
 
     u8 cmd[2] = {0};
     u32 data_length = 0;
