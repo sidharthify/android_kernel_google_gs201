@@ -161,22 +161,16 @@ DEFINE_EVENT(softirq, softirq_raise,
 );
 
 DECLARE_EVENT_CLASS(tasklet,
-
 	TP_PROTO(void *func),
-
 	TP_ARGS(func),
-
 	TP_STRUCT__entry(
 		__field(	void *,	func)
 	),
-
 	TP_fast_assign(
 		__entry->func = func;
 	),
-
 	TP_printk("function=%ps", __entry->func)
 );
-
 /**
  * tasklet_entry - called immediately before the tasklet is run
  * @func:  tasklet callback or function being run
@@ -184,12 +178,9 @@ DECLARE_EVENT_CLASS(tasklet,
  * Used to find individual tasklet execution time
  */
 DEFINE_EVENT(tasklet, tasklet_entry,
-
 	TP_PROTO(void *func),
-
 	TP_ARGS(func)
 );
-
 /**
  * tasklet_exit - called immediately after the tasklet is run
  * @func:  tasklet callback or function being run
@@ -197,9 +188,7 @@ DEFINE_EVENT(tasklet, tasklet_entry,
  * Used to find individual tasklet execution time
  */
 DEFINE_EVENT(tasklet, tasklet_exit,
-
 	TP_PROTO(void *func),
-
 	TP_ARGS(func)
 );
 
