@@ -140,3 +140,12 @@ void iif_manager_broadcast_fence_unblocked(struct iif_manager *mgr, struct iif_f
 
 	up_read(&mgr->ops_sema);
 }
+
+EXPORT_SYMBOL(iif_manager_init);
+EXPORT_SYMBOL(iif_manager_get);
+EXPORT_SYMBOL(iif_manager_put);
+EXPORT_SYMBOL(iif_manager_register_ops);
+EXPORT_SYMBOL(iif_manager_unregister_ops);
+EXPORT_SYMBOL(iif_manager_acquire_block_wakelock);
+EXPORT_SYMBOL(iif_manager_release_block_wakelock);
+EXPORT_SYMBOL(iif_manager_broadcast_fence_unblocked);

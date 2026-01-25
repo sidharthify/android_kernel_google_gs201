@@ -667,3 +667,10 @@ err_out:
 	gcip_iommu_reserve_region_put(region);
 	return ERR_PTR(ret);
 }
+
+EXPORT_SYMBOL(gcip_iommu_reserve_manager_create);
+EXPORT_SYMBOL(gcip_iommu_reserve_manager_retire);
+EXPORT_SYMBOL(gcip_iommu_reserve_region_create);
+EXPORT_SYMBOL(gcip_iommu_reserve_region_retire);
+EXPORT_SYMBOL(gcip_iommu_reserve_map_buffer);
+EXPORT_SYMBOL(gcip_iommu_reserve_map_dma_buf);

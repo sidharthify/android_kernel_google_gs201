@@ -130,3 +130,6 @@ void gcip_slc_debugfs_exit(struct gcip_slc *slc)
 
 	debugfs_remove_recursive(slc->d_entry);
 }
+
+EXPORT_SYMBOL(gcip_slc_debugfs_init);
+EXPORT_SYMBOL(gcip_slc_debugfs_exit);

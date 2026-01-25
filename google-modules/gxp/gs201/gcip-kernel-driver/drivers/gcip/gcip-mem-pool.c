@@ -64,3 +64,8 @@ void gcip_mem_pool_free(struct gcip_mem_pool *pool, unsigned long addr, size_t s
 	size = ALIGN(size, pool->granule);
 	gen_pool_free(pool->gen_pool, addr, size);
 }
+
+EXPORT_SYMBOL(gcip_mem_pool_init);
+EXPORT_SYMBOL(gcip_mem_pool_exit);
+EXPORT_SYMBOL(gcip_mem_pool_alloc);
+EXPORT_SYMBOL(gcip_mem_pool_free);

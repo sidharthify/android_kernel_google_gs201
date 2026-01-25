@@ -1096,3 +1096,31 @@ int iif_fence_outstanding_waiters(struct iif_fence *fence)
 
 	return outstanding;
 }
+
+EXPORT_SYMBOL(iif_fence_init);
+EXPORT_SYMBOL(iif_fence_install_fd);
+EXPORT_SYMBOL(iif_fence_on_sync_file_release);
+EXPORT_SYMBOL(iif_fence_get);
+EXPORT_SYMBOL(iif_fence_fdget);
+EXPORT_SYMBOL(iif_fence_put);
+EXPORT_SYMBOL(iif_fence_put_async);
+EXPORT_SYMBOL(iif_fence_submit_signaler);
+EXPORT_SYMBOL(iif_fence_submit_waiter);
+EXPORT_SYMBOL(iif_fence_submit_signaler_and_waiter);
+EXPORT_SYMBOL(iif_fence_signal);
+EXPORT_SYMBOL(iif_fence_signal_async);
+EXPORT_SYMBOL(iif_fence_signal_with_status);
+EXPORT_SYMBOL(iif_fence_signal_with_status_async);
+EXPORT_SYMBOL(iif_fence_get_signal_status);
+EXPORT_SYMBOL(iif_fence_set_propagate_unblock);
+EXPORT_SYMBOL(iif_fence_is_signaled);
+EXPORT_SYMBOL(iif_fence_waited);
+EXPORT_SYMBOL(iif_fence_waited_async);
+EXPORT_SYMBOL(iif_fence_add_poll_callback);
+EXPORT_SYMBOL(iif_fence_remove_poll_callback);
+EXPORT_SYMBOL(iif_fence_add_all_signaler_submitted_callback);
+EXPORT_SYMBOL(iif_fence_remove_all_signaler_submitted_callback);
+EXPORT_SYMBOL(iif_fence_unsubmitted_signalers);
+EXPORT_SYMBOL(iif_fence_submitted_signalers);
+EXPORT_SYMBOL(iif_fence_signaled_signalers);
+EXPORT_SYMBOL(iif_fence_outstanding_waiters);

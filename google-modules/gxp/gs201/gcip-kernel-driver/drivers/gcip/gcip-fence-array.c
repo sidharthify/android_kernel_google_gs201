@@ -355,3 +355,22 @@ int gcip_fence_array_add_ikf(struct gcip_fence_array *fence_array, struct dma_fe
 
 	return ret;
 }
+
+EXPORT_SYMBOL(gcip_fence_array_create);
+EXPORT_SYMBOL(gcip_fence_array_get);
+EXPORT_SYMBOL(gcip_fence_array_put);
+EXPORT_SYMBOL(gcip_fence_array_put_async);
+EXPORT_SYMBOL(gcip_fence_array_signal);
+EXPORT_SYMBOL(gcip_fence_array_signal_async);
+EXPORT_SYMBOL(gcip_fence_array_waited);
+EXPORT_SYMBOL(gcip_fence_array_waited_async);
+EXPORT_SYMBOL(gcip_fence_array_submit_signaler);
+EXPORT_SYMBOL(gcip_fence_array_submit_waiter);
+EXPORT_SYMBOL(gcip_fence_array_submit_waiter_and_signaler);
+EXPORT_SYMBOL(gcip_fence_array_get_iif_id);
+EXPORT_SYMBOL(gcip_fence_array_wait_signaler_submission);
+EXPORT_SYMBOL(gcip_fence_array_merge_ikf);
+EXPORT_SYMBOL(gcip_fence_array_iif_set_propagate_unblock);
+EXPORT_SYMBOL(gcip_fence_array_add);
+EXPORT_SYMBOL(gcip_fence_array_add_iif);
+EXPORT_SYMBOL(gcip_fence_array_add_ikf);

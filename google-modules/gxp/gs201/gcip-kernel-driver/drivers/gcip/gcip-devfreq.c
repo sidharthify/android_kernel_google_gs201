@@ -357,3 +357,6 @@ void gcip_devfreq_destroy(struct gcip_devfreq *gdevfreq)
 	gcip_devfreq_unregister(gdevfreq);
 	devm_kfree(gdevfreq->dev, gdevfreq);
 }
+
+EXPORT_SYMBOL(gcip_devfreq_create);
+EXPORT_SYMBOL(gcip_devfreq_destroy);

@@ -239,3 +239,14 @@ void gcip_pm_shutdown(struct gcip_pm *pm, bool force)
 unlock:
 	mutex_unlock(&pm->lock);
 }
+
+EXPORT_SYMBOL(gcip_pm_put);
+EXPORT_SYMBOL(gcip_pm_create);
+EXPORT_SYMBOL(gcip_pm_destroy);
+EXPORT_SYMBOL(gcip_pm_get_if_powered);
+EXPORT_SYMBOL(gcip_pm_get);
+EXPORT_SYMBOL(gcip_pm_put_async);
+EXPORT_SYMBOL(gcip_pm_flush_put_work);
+EXPORT_SYMBOL(gcip_pm_get_count);
+EXPORT_SYMBOL(gcip_pm_is_powered);
+EXPORT_SYMBOL(gcip_pm_shutdown);

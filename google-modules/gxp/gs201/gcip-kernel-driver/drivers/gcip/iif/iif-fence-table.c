@@ -161,3 +161,11 @@ u8 iif_fence_table_get_flag(struct iif_fence_table *fence_table, unsigned int fe
 {
 	return fence_table->signal_table[fence_id].flag;
 }
+
+EXPORT_SYMBOL(iif_fence_table_init);
+EXPORT_SYMBOL(iif_fence_table_init_fence_entry);
+EXPORT_SYMBOL(iif_fence_table_set_waiting_ip);
+EXPORT_SYMBOL(iif_fence_table_set_remaining_signals);
+EXPORT_SYMBOL(iif_fence_table_get_remaining_signals);
+EXPORT_SYMBOL(iif_fence_table_set_flag);
+EXPORT_SYMBOL(iif_fence_table_get_flag);

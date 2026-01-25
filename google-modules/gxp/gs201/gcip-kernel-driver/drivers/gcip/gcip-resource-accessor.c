@@ -290,3 +290,7 @@ int gcip_register_accessible_resource(struct gcip_resource_accessor *accessor,
 
 	return 0;
 }
+
+EXPORT_SYMBOL(gcip_resource_accessor_create);
+EXPORT_SYMBOL(gcip_resource_accessor_destroy);
+EXPORT_SYMBOL(gcip_register_accessible_resource);

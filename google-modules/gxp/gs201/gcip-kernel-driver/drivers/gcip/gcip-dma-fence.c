@@ -305,3 +305,17 @@ void gcip_dma_fence_array_disable_signaling(struct dma_fence *fence)
 out:
 	spin_unlock_irqrestore(fence->lock, flags);
 }
+
+EXPORT_SYMBOL(gcip_signal_dma_fence_with_status);
+EXPORT_SYMBOL(gcip_dma_fence_manager_create);
+EXPORT_SYMBOL(gcip_dma_fence_get_timeline_name);
+EXPORT_SYMBOL(gcip_dma_fence_always_true);
+EXPORT_SYMBOL(gcip_dma_fence_init);
+EXPORT_SYMBOL(gcip_dma_fence_exit);
+EXPORT_SYMBOL(gcip_dma_fence_status);
+EXPORT_SYMBOL(gcip_dma_fence_signal);
+EXPORT_SYMBOL(gcip_dma_fenceptr_signal);
+EXPORT_SYMBOL(gcip_dma_fence_show);
+EXPORT_SYMBOL(gcip_dma_fence_merge_fences);
+EXPORT_SYMBOL(gcip_dma_fence_merge_fds);
+EXPORT_SYMBOL(gcip_dma_fence_array_disable_signaling);

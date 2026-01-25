@@ -188,3 +188,6 @@ void iif_dma_fence_stop(struct iif_fence *iif_fence)
 		iif_fence_put(iif_fence);
 	}
 }
+
+EXPORT_SYMBOL(iif_dma_fence_wait_timeout);
+EXPORT_SYMBOL(iif_dma_fence_stop);

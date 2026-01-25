@@ -345,3 +345,23 @@ void gcip_fence_iif_set_propagate_unblock(struct gcip_fence *fence)
 	if (fence->type == GCIP_INTER_IP_FENCE)
 		iif_fence_set_propagate_unblock(fence->fence.iif);
 }
+
+EXPORT_SYMBOL(gcip_fence_create_iif);
+EXPORT_SYMBOL(gcip_fence_fdget);
+EXPORT_SYMBOL(gcip_fence_get);
+EXPORT_SYMBOL(gcip_fence_get_iif);
+EXPORT_SYMBOL(gcip_fence_get_ikf);
+EXPORT_SYMBOL(gcip_fence_put);
+EXPORT_SYMBOL(gcip_fence_put_async);
+EXPORT_SYMBOL(gcip_fence_submit_signaler);
+EXPORT_SYMBOL(gcip_fence_submit_waiter);
+EXPORT_SYMBOL(gcip_fence_signal);
+EXPORT_SYMBOL(gcip_fence_signal_async);
+EXPORT_SYMBOL(gcip_fence_waited);
+EXPORT_SYMBOL(gcip_fence_waited_async);
+EXPORT_SYMBOL(gcip_fence_add_all_signaler_submitted_cb);
+EXPORT_SYMBOL(gcip_fence_remove_all_signaler_submitted_cb);
+EXPORT_SYMBOL(gcip_fence_get_iif_id);
+EXPORT_SYMBOL(gcip_fence_wait_signaler_submission);
+EXPORT_SYMBOL(gcip_fence_get_status);
+EXPORT_SYMBOL(gcip_fence_iif_set_propagate_unblock);

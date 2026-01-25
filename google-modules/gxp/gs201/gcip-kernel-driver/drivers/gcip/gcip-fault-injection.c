@@ -245,3 +245,7 @@ int gcip_fault_inject_send(struct gcip_fault_inject *injection)
 
 	return ret;
 }
+
+EXPORT_SYMBOL(gcip_fault_inject_create);
+EXPORT_SYMBOL(gcip_fault_inject_destroy);
+EXPORT_SYMBOL(gcip_fault_inject_send);

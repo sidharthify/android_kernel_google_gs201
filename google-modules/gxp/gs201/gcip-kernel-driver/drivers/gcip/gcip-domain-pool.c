@@ -145,3 +145,8 @@ void gcip_domain_pool_destroy(struct gcip_domain_pool *pool)
 	ida_destroy(&pool->idp);
 	vfree(pool->array);
 }
+
+EXPORT_SYMBOL(gcip_domain_pool_init);
+EXPORT_SYMBOL(gcip_domain_pool_alloc);
+EXPORT_SYMBOL(gcip_domain_pool_free);
+EXPORT_SYMBOL(gcip_domain_pool_destroy);

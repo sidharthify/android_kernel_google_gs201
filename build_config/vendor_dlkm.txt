@@ -40,6 +40,7 @@ mali_kutf.ko
 mali_kutf_clk_rate_trace_test_portal.ko
 mali_kbase.ko
 mali_pixel.ko
+gcip.ko
 gxp.ko
 lwis.ko
 sscoredump_test.ko

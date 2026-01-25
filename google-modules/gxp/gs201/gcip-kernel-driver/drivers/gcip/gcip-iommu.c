@@ -1333,5 +1333,28 @@ void gcip_iommu_unmap(struct gcip_iommu_domain *domain, dma_addr_t iova, size_t 
 			 size, unmapped);
 }
 
+EXPORT_SYMBOL(gcip_iommu_domain_pool_init);
+EXPORT_SYMBOL(gcip_iommu_domain_pool_destroy);
+EXPORT_SYMBOL(gcip_iommu_domain_pool_enable_best_fit_algo);
+EXPORT_SYMBOL(gcip_iommu_domain_pool_alloc_domain);
+EXPORT_SYMBOL(gcip_iommu_domain_pool_free_domain);
+EXPORT_SYMBOL(gcip_iommu_domain_pool_set_pasid_range);
+EXPORT_SYMBOL(gcip_iommu_domain_pool_attach_domain);
+EXPORT_SYMBOL(gcip_iommu_domain_pool_detach_domain);
+EXPORT_SYMBOL(gcip_iommu_get_domain_for_dev);
+EXPORT_SYMBOL(gcip_iommu_encode_gcip_map_flags);
+EXPORT_SYMBOL(gcip_iommu_dmabuf_map_show);
+EXPORT_SYMBOL(gcip_iommu_domain_map_buffer_to_iova);
+EXPORT_SYMBOL(gcip_iommu_domain_map_buffer);
+EXPORT_SYMBOL(gcip_iommu_domain_map_dma_buf_to_iova);
+EXPORT_SYMBOL(gcip_iommu_domain_unmap_sgt_from_iova);
+EXPORT_SYMBOL(gcip_iommu_domain_map_dma_buf);
+EXPORT_SYMBOL(gcip_iommu_domain_map_sgt_to_iova);
+EXPORT_SYMBOL(gcip_iommu_mapping_unmap);
+EXPORT_SYMBOL(gcip_iommu_alloc_iova);
+EXPORT_SYMBOL(gcip_iommu_free_iova);
+EXPORT_SYMBOL(gcip_iommu_map);
+EXPORT_SYMBOL(gcip_iommu_unmap);
+
 MODULE_IMPORT_NS(DMA_BUF);
 MODULE_LICENSE("GPL v2");

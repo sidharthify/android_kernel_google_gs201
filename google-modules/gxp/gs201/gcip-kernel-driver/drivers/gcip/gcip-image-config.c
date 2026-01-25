@@ -229,3 +229,7 @@ void gcip_image_config_clear(struct gcip_image_config_parser *parser)
 	memset(&parser->last_config, 0, sizeof(parser->last_config));
 	parser->last_config_valid = false;
 }
+
+EXPORT_SYMBOL(gcip_image_config_parser_init);
+EXPORT_SYMBOL(gcip_image_config_parse);
+EXPORT_SYMBOL(gcip_image_config_clear);

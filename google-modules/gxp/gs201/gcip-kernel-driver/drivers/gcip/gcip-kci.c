@@ -568,3 +568,13 @@ int gcip_kci_error_to_errno(struct device *dev, enum gcip_kci_error code)
 		return -EBADRQC;
 	}
 }
+
+EXPORT_SYMBOL(gcip_kci_send_cmd_return_resp);
+EXPORT_SYMBOL(gcip_kci_send_cmd);
+EXPORT_SYMBOL(gcip_kci_handle_irq);
+EXPORT_SYMBOL(gcip_kci_update_usage_async);
+EXPORT_SYMBOL(gcip_kci_init);
+EXPORT_SYMBOL(gcip_kci_reinit);
+EXPORT_SYMBOL(gcip_kci_cancel_work_queues);
+EXPORT_SYMBOL(gcip_kci_release);
+EXPORT_SYMBOL(gcip_kci_error_to_errno);

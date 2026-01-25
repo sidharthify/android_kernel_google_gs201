@@ -533,3 +533,11 @@ int gcip_thermal_restore_on_powering(struct gcip_thermal *thermal)
 
 	return ret;
 }
+
+EXPORT_SYMBOL(gcip_thermal_get_notifier_block);
+EXPORT_SYMBOL(gcip_thermal_destroy);
+EXPORT_SYMBOL(gcip_thermal_create);
+EXPORT_SYMBOL(gcip_thermal_suspend_device);
+EXPORT_SYMBOL(gcip_thermal_resume_device);
+EXPORT_SYMBOL(gcip_thermal_is_device_suspended);
+EXPORT_SYMBOL(gcip_thermal_restore_on_powering);

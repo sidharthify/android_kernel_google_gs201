@@ -748,3 +748,15 @@ uint gcip_mailbox_inc_seq_num(struct gcip_mailbox *mailbox, uint n)
 
 	return ret;
 }
+EXPORT_SYMBOL(gcip_mailbox_cancel_awaiter_timeout);
+EXPORT_SYMBOL(gcip_mailbox_release_awaiter);
+EXPORT_SYMBOL(gcip_mailbox_init);
+EXPORT_SYMBOL(gcip_mailbox_release);
+EXPORT_SYMBOL(gcip_mailbox_consume_responses_work);
+EXPORT_SYMBOL(gcip_mailbox_consume_responses);
+EXPORT_SYMBOL(gcip_mailbox_send_cmd);
+EXPORT_SYMBOL(gcip_mailbox_put_cmd_flags);
+EXPORT_SYMBOL(gcip_mailbox_put_cmd);
+EXPORT_SYMBOL(gcip_mailbox_cancel_awaiter);
+EXPORT_SYMBOL(gcip_mailbox_consume_one_response);
+EXPORT_SYMBOL(gcip_mailbox_inc_seq_num);

@@ -189,3 +189,6 @@ struct iif_sync_file *iif_sync_file_fdget(int fd)
 
 	return file->private_data;
 }
+
+EXPORT_SYMBOL(iif_sync_file_create);
+EXPORT_SYMBOL(iif_sync_file_fdget);

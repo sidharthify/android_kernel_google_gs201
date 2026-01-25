@@ -153,3 +153,8 @@ int gcip_firmware_tracing_restore_on_powering(struct gcip_fw_tracing *fw_tracing
 
 	return ret;
 }
+
+EXPORT_SYMBOL(gcip_fw_flavor_str);
+EXPORT_SYMBOL(gcip_firmware_tracing_create);
+EXPORT_SYMBOL(gcip_firmware_tracing_destroy);
+EXPORT_SYMBOL(gcip_firmware_tracing_restore_on_powering);

@@ -1135,3 +1135,7 @@ void gcip_usage_stats_process_buffer(struct gcip_usage_stats *ustats, void *buf)
 		metric = (struct gcip_usage_stats_metric *)((void *)metric + metric_size);
 	}
 }
+
+EXPORT_SYMBOL(gcip_usage_stats_init);
+EXPORT_SYMBOL(gcip_usage_stats_exit);
+EXPORT_SYMBOL(gcip_usage_stats_process_buffer);

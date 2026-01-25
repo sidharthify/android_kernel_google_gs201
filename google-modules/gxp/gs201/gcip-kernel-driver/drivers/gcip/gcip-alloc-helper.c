@@ -93,3 +93,6 @@ void gcip_free_noncontiguous(struct sg_table *sgt)
 	vfree(sh->mem);
 	kfree(sh);
 }
+
+EXPORT_SYMBOL(gcip_alloc_noncontiguous);
+EXPORT_SYMBOL(gcip_free_noncontiguous);

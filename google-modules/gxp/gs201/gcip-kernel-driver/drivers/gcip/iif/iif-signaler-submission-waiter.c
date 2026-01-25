@@ -255,3 +255,5 @@ int iif_wait_signaler_submission(struct iif_fence **fences, int num_fences, unsi
 
 	return ret;
 }
+
+EXPORT_SYMBOL(iif_wait_signaler_submission);

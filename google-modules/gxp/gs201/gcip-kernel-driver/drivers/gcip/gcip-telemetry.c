@@ -275,3 +275,14 @@ void gcip_telemetry_exit(struct gcip_telemetry *tel)
 		eventfd_ctx_put(tel->ctx);
 	tel->ctx = NULL;
 }
+
+EXPORT_SYMBOL(gcip_telemetry_kci);
+EXPORT_SYMBOL(gcip_telemetry_set_event);
+EXPORT_SYMBOL(gcip_telemetry_unset_event);
+EXPORT_SYMBOL(gcip_telemetry_fw_log);
+EXPORT_SYMBOL(gcip_telemetry_fw_trace);
+EXPORT_SYMBOL(gcip_telemetry_irq_handler);
+EXPORT_SYMBOL(gcip_telemetry_inc_mmap_count);
+EXPORT_SYMBOL(gcip_telemetry_mmap_buffer);
+EXPORT_SYMBOL(gcip_telemetry_init);
+EXPORT_SYMBOL(gcip_telemetry_exit);
