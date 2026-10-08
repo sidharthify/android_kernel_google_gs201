@@ -246,7 +246,7 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
     EXTRA_CFLAGS += -DCONFIG_MALI_NO_MALI_DEFAULT_GPU=$(CONFIG_MALI_NO_MALI_DEFAULT_GPU)
 endif
 
-include $(ROOT_DIR)/private/google-modules/soc/gs/Makefile.include
+include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 
 #
 # KBUILD_EXTRA_SYMBOLS to prevent warnings about unknown functions
