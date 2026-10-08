@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm64 6.1.158 Kernel Configuration
+# Linux/arm64 6.1.161 Kernel Configuration
 #
 CONFIG_CC_VERSION_TEXT="Android (10087095, +pgo, +bolt, +lto, -mlgo, based on r487747c) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362)"
 CONFIG_GCC_VERSION=0
@@ -229,6 +229,7 @@ CONFIG_RD_LZ4=y
 CONFIG_RD_ZSTD=y
 CONFIG_BOOT_CONFIG=y
 # CONFIG_BOOT_CONFIG_EMBED is not set
+CONFIG_CMDLINE_LOG_WRAP_IDEAL_LEN=974
 CONFIG_INITRAMFS_PRESERVE_MTIME=y
 CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
 # CONFIG_CC_OPTIMIZE_FOR_SIZE is not set
@@ -5526,7 +5527,6 @@ CONFIG_STAGING=y
 # CONFIG_RTL8192U is not set
 # CONFIG_RTLLIB is not set
 # CONFIG_RTL8723BS is not set
-# CONFIG_R8712U is not set
 # CONFIG_R8188EU is not set
 # CONFIG_RTS5208 is not set
 # CONFIG_VT6655 is not set
