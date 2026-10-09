@@ -1835,6 +1835,20 @@ select_task_rq_dl(struct task_struct *p, int cpu, int flags)
 	if (!(flags & WF_TTWU))
 		goto out;
 
+	/*
+	 * Schedutil's kthread is woken from irq_work on the CPU that asked for
+	 * the frequency change, which is already awake. Run it right there
+	 * instead of on its previous CPU, which is usually idle and would have
+	 * to be kicked out of a deep idle state before the change can happen.
+	 */
+	if (dl_entity_is_special(&p->dl)) {
+		int this_cpu = smp_processor_id();
+
+		if (cpumask_test_cpu(this_cpu, p->cpus_ptr))
+			cpu = this_cpu;
+		goto out;
+	}
+
 	rq = cpu_rq(cpu);
 
 	rcu_read_lock();
