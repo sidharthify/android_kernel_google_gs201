@@ -458,10 +458,14 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 }
 
 /*
- * Put the hrtimer of every CPU on the same sample_period grid and give it some
- * slack, so that idle CPUs come out of idle for the watchdog all at once, and
- * together with other watchdogs using the same period, instead of each one
- * waking up on its own schedule. Busy CPUs just run it from their tick.
+ * Put the hrtimer of every CPU on the same sample_period grid, so that idle CPUs
+ * come out of idle for the watchdog all at once, and together with other
+ * watchdogs using the same period, instead of each one waking up on its own
+ * schedule.
+ *
+ * Don't give it any slack: hrtimer_forward_now() measures from the hard expiry,
+ * so a timer that runs inside its slack window wouldn't get pushed forward and
+ * would fire again right away until the window is over.
  */
 static void watchdog_hrtimer_start(struct hrtimer *hrtimer)
 {
@@ -469,8 +473,8 @@ static void watchdog_hrtimer_start(struct hrtimer *hrtimer)
 	u64 rem;
 
 	div64_u64_rem(expires, sample_period, &rem);
-	hrtimer_start_range_ns(hrtimer, ns_to_ktime(expires - rem),
-			       sample_period / 4, HRTIMER_MODE_ABS_PINNED_HARD);
+	hrtimer_start(hrtimer, ns_to_ktime(expires - rem),
+		      HRTIMER_MODE_ABS_PINNED_HARD);
 }
 
 static void watchdog_enable(unsigned int cpu)
