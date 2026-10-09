@@ -1244,7 +1244,7 @@ static int aoc_path_put(uint32_t ep_id, uint32_t hw_id,
 		return -EINVAL;
 	}
 
-	pr_info("%s: set ep %u hw_id 0x%x enable %d chip %p", __func__, ep_idx,
+	pr_debug("%s: set ep %u hw_id 0x%x enable %d chip %p", __func__, ep_idx,
 		hw_idx, enable, chip);
 
 	mutex_lock(&path_mutex);

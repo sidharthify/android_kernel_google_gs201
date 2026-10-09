@@ -669,7 +669,7 @@ int aoc_sidetone_cfg_get(struct aoc_chip *chip, int param, long *val)
 		return err;
 	}
 
-	pr_info("%s, sidetone- vol:%d, Eq num stage: %d, mic:%d\n", __func__, cmd.volume,
+	pr_debug("%s, sidetone- vol:%d, Eq num stage: %d, mic:%d\n", __func__, cmd.volume,
 		cmd.eq_num_stages, cmd.mic_select);
 
 	chip->sidetone_cfg = cmd;
@@ -738,7 +738,7 @@ int aoc_sidetone_eq_get(struct aoc_chip *chip, int biquad_idx, long *val)
 	struct CMD_AUDIO_OUTPUT_GET_SIDETONE_EQ cmd;
 	int n_params = ARRAY_SIZE(cmd.coeffs);
 
-	pr_info("%s: sidetone eq %d - %d params\n", __func__, biquad_idx, n_params);
+	pr_debug("%s: sidetone eq %d - %d params\n", __func__, biquad_idx, n_params);
 
 	AocCmdHdrSet(&(cmd.parent), CMD_AUDIO_OUTPUT_GET_SIDETONE_EQ_ID, sizeof(cmd));
 
@@ -765,7 +765,7 @@ int aoc_sidetone_eq_set(struct aoc_chip *chip, int biquad_idx, long *val)
 	struct CMD_AUDIO_OUTPUT_SET_SIDETONE_EQ cmd;
 	int n_params = ARRAY_SIZE(cmd.coeffs);
 
-	pr_info("%s: sidetone eq %d - %d params\n", __func__, biquad_idx, n_params);
+	pr_debug("%s: sidetone eq %d - %d params\n", __func__, biquad_idx, n_params);
 
 	AocCmdHdrSet(&(cmd.parent), CMD_AUDIO_OUTPUT_SET_SIDETONE_EQ_ID, sizeof(cmd));
 	cmd.stage_num = biquad_idx;
@@ -809,7 +809,7 @@ int aoc_incall_capture_enable_get(struct aoc_chip *chip, int stream, long *val)
 		*val = cmd.mode;
 
 	chip->incall_capture_state[stream] = cmd.mode;
-	pr_info("%s: get voice call capture stream %d state %d\n", __func__, stream, cmd.mode);
+	pr_debug("%s: get voice call capture stream %d state %d\n", __func__, stream, cmd.mode);
 
 	return 0;
 }
@@ -1022,7 +1022,7 @@ int aoc_get_asp_mode(struct aoc_chip *chip, int block, int component, int key)
 	cmd.component = component;
 	cmd.key = key;
 
-	pr_info("get asp mode: block=%d, component=%d, key=%d\n", block, component, key);
+	pr_debug("get asp mode: block=%d, component=%d, key=%d\n", block, component, key);
 
 	/* Send cmd to AOC */
 	err = aoc_audio_control(CMD_OUTPUT_CHANNEL, (uint8_t *)&cmd,
@@ -1096,7 +1096,7 @@ int aoc_set_audio_dsp_mode(struct aoc_chip *chip, long val)
 
 	cmd.mode = val;
 
-	pr_info("Set audio dsp mode: %ld\n", val);
+	pr_debug("Set audio dsp mode: %ld\n", val);
 
 	/* Send cmd to AOC */
 	err = aoc_audio_control(CMD_OUTPUT_CHANNEL, (uint8_t *)&cmd, sizeof(cmd), NULL, chip);
@@ -1170,7 +1170,7 @@ int aoc_get_sink_state(struct aoc_chip *chip, int sink)
 	if (err < 0)
 		pr_err("Error in get aoc sink processing state !\n");
 
-	pr_info("sink_state:%d - %d\n", sink, cmd.mode);
+	pr_debug("sink_state:%d - %d\n", sink, cmd.mode);
 
 	return err < 0 ? err : cmd.mode;
 }

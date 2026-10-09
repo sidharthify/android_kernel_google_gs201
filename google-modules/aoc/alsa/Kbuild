@@ -12,3 +12,5 @@ aoc_alsa_dev_util-objs		:= aoc_alsa_path.o aoc_alsa_drv.o \
 				   aoc_alsa_usb.o aoc_alsa_dp.o
 aoc_alsa_dev-objs		:= aoc_alsa_card.o
 
+
+ccflags-y			+= -DALSA_AOC_CMD_LOG_DISABLE
