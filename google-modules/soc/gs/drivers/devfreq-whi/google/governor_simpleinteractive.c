@@ -432,6 +432,14 @@ static int devfreq_simple_interactive_register_notifier(struct devfreq *df)
 		goto err3;
 	}
 
+	/*
+	 * Other than the first wakeup below, the thread is only woken up by
+	 * freq_timer, which always runs on BOUND_CPU_NUM. Keep the thread there
+	 * too, so that waking it up doesn't kick whichever CPU it last ran on
+	 * out of idle.
+	 */
+	kthread_bind(data->change_freq_task, BOUND_CPU_NUM);
+
 #if IS_ENABLED(CONFIG_EXYNOS_ALT_DVFS)
 	if (df->profile->get_dev_status) {
 		data->freq_timer.expires = jiffies +
@@ -441,9 +449,6 @@ static int devfreq_simple_interactive_register_notifier(struct devfreq *df)
 			msecs_to_jiffies(data->alt_data.hold_sample_time);
 		add_timer_on(&data->freq_slack_timer, BOUND_CPU_NUM);
 	}
-
-#else
-	kthread_bind(data->change_freq_task, BOUND_CPU_NUM);
 #endif
 
 	wake_up_process(data->change_freq_task);
