@@ -228,7 +228,7 @@ static int cs35l41_dsp_power_ev(struct snd_soc_dapm_widget *w,
 		snd_soc_dapm_to_component(w->dapm);
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
-	dev_info(cs35l41->dev, "%s: event: %d halo_booted: %d\n",
+	dev_dbg(cs35l41->dev, "%s: event: %d halo_booted: %d\n",
 				__func__, event, cs35l41->halo_booted);
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
@@ -352,7 +352,7 @@ static int cs35l41_bp_current_limit_put(struct snd_kcontrol *kcontrol,
 		dev_err(cs35l41->dev, "Failed to write peak current limit\n");
 		return ret;
 	} else {
-		dev_info(cs35l41->dev, "%s: value %d\n",
+		dev_dbg(cs35l41->dev, "%s: value %d\n",
 				__func__, cs35l41->pdata.bst_ipk);
 	}
 
@@ -630,7 +630,7 @@ static int cs35l41_hibernate_force_wake_put(struct snd_kcontrol *kcontrol,
 	unsigned int amp_active;
 
 	regmap_read(cs35l41->regmap, CS35L41_PWR_CTRL1, &amp_active);
-	dev_info(cs35l41->dev, "hb force wake %d from hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "hb force wake %d from hibernate state %d\n",
 		cs35l41->hibernate_force_wake, cs35l41->amp_hibernate);
 
 	mutex_lock(&cs35l41->hb_forcewake_lock);
@@ -2200,7 +2200,7 @@ static int cs35l41_hibernate(struct snd_soc_dapm_widget *w,
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
 	int ret = 0;
-	dev_info(cs35l41->dev, "%s event 0x%x hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "%s event 0x%x hibernate state %d\n",
 		__func__, event, cs35l41->amp_hibernate);
 	if (!cs35l41->dsp.running ||
 	     cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE)
@@ -2274,7 +2274,7 @@ static int cs35l41_main_amp_event(struct snd_soc_dapm_widget *w,
 	bool pdn;
 	unsigned int val;
 
-	dev_info(cs35l41->dev, "main amp event %d", event);
+	dev_dbg(cs35l41->dev, "main amp event %d", event);
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
 		regmap_multi_reg_write_bypassed(cs35l41->regmap,
@@ -3775,7 +3775,7 @@ static int cs35l41_enter_hibernate(struct cs35l41_private *cs35l41)
 {
 	int i;
 
-	dev_info(cs35l41->dev, "%s: hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "%s: hibernate state %d\n",
 		__func__, cs35l41->amp_hibernate);
 
 	if (cs35l41->amp_hibernate == CS35L41_HIBERNATE_STANDBY)
@@ -3832,7 +3832,7 @@ static int cs35l41_exit_hibernate(struct cs35l41_private *cs35l41)
 	int retries = 5, i;
 	u32 *p_trim_data;
 
-	dev_info(cs35l41->dev, "%s: hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "%s: hibernate state %d\n",
 		__func__, cs35l41->amp_hibernate);
 
 	if (cs35l41->amp_hibernate != CS35L41_HIBERNATE_STANDBY)
