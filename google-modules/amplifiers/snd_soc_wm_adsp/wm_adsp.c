@@ -3172,7 +3172,7 @@ int wm_adsp2_preloader_put(struct snd_kcontrol *kcontrol,
 	if (dsp->preloaded == ucontrol->value.integer.value[0])
 		return 0;
 	snprintf(preload, ARRAY_SIZE(preload), "%s Preload", dsp->name);
-	adsp_info(dsp, "%s: preload name: %s old value: %d new value: %ld",
+	adsp_dbg(dsp, "%s: preload name: %s old value: %d new value: %ld",
 			__func__, preload, dsp->preloaded,
 			ucontrol->value.integer.value[0]);
 
