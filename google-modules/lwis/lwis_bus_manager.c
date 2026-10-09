@@ -818,7 +818,7 @@ static int get_device_priority_and_bus_manager(struct lwis_client *client, int *
 			dev_err(client->lwis_dev->dev, "LWIS bus manager is NULL\n");
 			return -EINVAL;
 		case DEVICE_TYPE_IOREG:
-			dev_info(client->lwis_dev->dev,
+			dev_dbg(client->lwis_dev->dev,
 				 "No LWIS bus manager associated with this device.\n");
 			return 0;
 		default:
