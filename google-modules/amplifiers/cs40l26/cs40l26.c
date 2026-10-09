@@ -1940,7 +1940,7 @@ static void cs40l26_vibe_stop_worker(struct work_struct *work)
 	if (delay_us && !skip_delay) {
 		mutex_unlock(&cs40l26->lock);
 
-		dev_info(cs40l26->dev, "Applying delay\n");
+		dev_dbg(cs40l26->dev, "Applying delay\n");
 
 		/* wait for SVC init phase to complete */
 		usleep_range(delay_us, delay_us + 100);
