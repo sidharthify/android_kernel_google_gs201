@@ -203,6 +203,22 @@ static enum hrtimer_restart hardlockup_watchdog_fn(struct hrtimer *hrtimer)
 	return HRTIMER_RESTART;
 }
 
+/*
+ * Line the hrtimers up on a sample_period grid with some slack, the same way the
+ * softlockup detector does. With the default periods of both, every CPU then
+ * wakes up once for the two watchdogs, at the same time as the other CPUs.
+ */
+static void hardlockup_watchdog_hrtimer_start(struct hrtimer *hrtimer)
+{
+	u64 period = hardlockup_watchdog.sample_period;
+	u64 expires = ktime_get_ns() + period;
+	u64 rem;
+
+	div64_u64_rem(expires, period, &rem);
+	hrtimer_start_range_ns(hrtimer, ns_to_ktime(expires - rem), period / 4,
+			       HRTIMER_MODE_ABS_PINNED);
+}
+
 static void hardlockup_watchdog_enable(unsigned int cpu)
 {
 	struct hardlockup_watchdog_pcpu *pcpu_val =
@@ -215,10 +231,9 @@ static void hardlockup_watchdog_enable(unsigned int cpu)
 	cpumask_set_cpu(cpu, &hardlockup_watchdog.allowed_mask);
 	hrtimer = &pcpu_val->hrtimer;
 
-	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
 	hrtimer->function = hardlockup_watchdog_fn;
-	hrtimer_start(hrtimer, ns_to_ktime(hardlockup_watchdog.sample_period),
-		      HRTIMER_MODE_REL_PINNED);
+	hardlockup_watchdog_hrtimer_start(hrtimer);
 
 	/* Initialize timestamp */
 	__touch_hardlockup_watchdog();
