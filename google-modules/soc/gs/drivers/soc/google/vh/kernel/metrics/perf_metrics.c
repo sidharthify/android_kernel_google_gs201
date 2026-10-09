@@ -83,6 +83,14 @@ static struct long_irq long_irq_stat;
 
 static DEFINE_PER_CPU(struct top_rt_runnable, top_rt_runnable);
 static DEFINE_PER_CPU(spinlock_t, rt_runnable_lock);
+
+/*
+ * The irq and runnable stats hook every irq, softirq, wakeup and context
+ * switch just to feed telemetry, so leave them off unless asked for.
+ */
+static bool hot_path_metrics;
+module_param(hot_path_metrics, bool, 0444);
+MODULE_PARM_DESC(hot_path_metrics, "Track long irq and rt runnable stats from boot");
 unsigned long long_rt_runnable_threshold_ns = 1500000UL;
 
 /*********************************************************************
@@ -906,6 +914,14 @@ int perf_metrics_init(struct kobject *metrics_kobj)
 	long_irq_stat.long_softirq_threshold = 10000;
 	long_irq_stat.long_irq_threshold = 500;
 	long_irq_stat.irq_storm_threshold_us = 500;
+
+	for_each_possible_cpu(cpu) {
+		spin_lock_init(&per_cpu(rt_runnable_lock, cpu));
+	}
+
+	if (!hot_path_metrics)
+		goto out;
+
 	ret = register_trace_softirq_entry(hook_softirq_begin, NULL);
 	if (ret) {
 		pr_err("Register soft irq handler hook fail %d\n", ret);
@@ -927,9 +943,6 @@ int perf_metrics_init(struct kobject *metrics_kobj)
 		return ret;
 	}
 
-	for_each_possible_cpu(cpu) {
-		spin_lock_init(&per_cpu(rt_runnable_lock, cpu));
-	}
 	ret = register_trace_sched_wakeup(vh_sched_wakeup_pixel_mod, NULL);
 	if (ret)
 		return ret;
@@ -938,6 +951,7 @@ int perf_metrics_init(struct kobject *metrics_kobj)
 	if (ret)
 		return ret;
 
+out:
 	pr_info("perf_metrics driver initialized! :D\n");
 	return ret;
 }
