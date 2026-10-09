@@ -5,7 +5,7 @@ pinctrl-slg51002.ko
 smra.ko
 slg51000-regulator.ko
 slg51002-regulator.ko
-iovad-best-fit-algo.ko
+iovad-vendor-hooks.ko
 slg51000-core.ko
 slg51002-core.ko
 usb_f_etr_miu.ko
