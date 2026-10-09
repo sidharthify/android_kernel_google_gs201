@@ -126,12 +126,14 @@ wait_for_common(struct completion *x, long timeout, int state)
 {
 	return __wait_for_common(x, schedule_timeout, timeout, state);
 }
+EXPORT_SYMBOL(wait_for_common);
 
 long __sched
 wait_for_common_io(struct completion *x, long timeout, int state)
 {
 	return __wait_for_common(x, io_schedule_timeout, timeout, state);
 }
+EXPORT_SYMBOL(wait_for_common_io);
 
 /**
  * wait_for_completion: - waits for completion of a task
