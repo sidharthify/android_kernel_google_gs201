@@ -5452,7 +5452,7 @@ int exynos_pcie_set_msi_ctrl_addr(int ch_num, u64 msi_ctrl_addr) {
 	struct exynos_pcie *exynos_pcie = &g_pcie_rc[ch_num];
 
         exynos_pcie->pci->pp.msi_data = msi_ctrl_addr;
-        dev_info(exynos_pcie->pci->dev, "Updated MSI Control Addr: %pad\n",
+        dev_dbg(exynos_pcie->pci->dev, "Updated MSI Control Addr: %pad\n",
                 &exynos_pcie->pci->pp.msi_data);
 
         return 0;
