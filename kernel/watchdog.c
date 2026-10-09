@@ -457,6 +457,22 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 	return HRTIMER_RESTART;
 }
 
+/*
+ * Put the hrtimer of every CPU on the same sample_period grid and give it some
+ * slack, so that idle CPUs come out of idle for the watchdog all at once, and
+ * together with other watchdogs using the same period, instead of each one
+ * waking up on its own schedule. Busy CPUs just run it from their tick.
+ */
+static void watchdog_hrtimer_start(struct hrtimer *hrtimer)
+{
+	u64 expires = ktime_get_ns() + sample_period;
+	u64 rem;
+
+	div64_u64_rem(expires, sample_period, &rem);
+	hrtimer_start_range_ns(hrtimer, ns_to_ktime(expires - rem),
+			       sample_period / 4, HRTIMER_MODE_ABS_PINNED_HARD);
+}
+
 static void watchdog_enable(unsigned int cpu)
 {
 	struct hrtimer *hrtimer = this_cpu_ptr(&watchdog_hrtimer);
@@ -471,10 +487,9 @@ static void watchdog_enable(unsigned int cpu)
 	 * Start the timer first to prevent the NMI watchdog triggering
 	 * before the timer has a chance to fire.
 	 */
-	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_HARD);
+	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_HARD);
 	hrtimer->function = watchdog_timer_fn;
-	hrtimer_start(hrtimer, ns_to_ktime(sample_period),
-		      HRTIMER_MODE_REL_PINNED_HARD);
+	watchdog_hrtimer_start(hrtimer);
 
 	/* Initialize timestamp */
 	update_touch_ts();
