@@ -201,9 +201,10 @@ static enum hrtimer_restart hardlockup_watchdog_fn(struct hrtimer *hrtimer)
 }
 
 /*
- * Line the hrtimers up on a sample_period grid with some slack, the same way the
- * softlockup detector does. With the default periods of both, every CPU then
- * wakes up once for the two watchdogs, at the same time as the other CPUs.
+ * Line the hrtimers up on a sample_period grid, the same way the softlockup
+ * detector does. With the default periods of both, every CPU then wakes up once
+ * for the two watchdogs, at the same time as the other CPUs. Like there, the
+ * timers get no slack, since hrtimer_forward_now() measures from the hard expiry.
  */
 static void hardlockup_watchdog_hrtimer_start(struct hrtimer *hrtimer)
 {
@@ -212,8 +213,7 @@ static void hardlockup_watchdog_hrtimer_start(struct hrtimer *hrtimer)
 	u64 rem;
 
 	div64_u64_rem(expires, period, &rem);
-	hrtimer_start_range_ns(hrtimer, ns_to_ktime(expires - rem), period / 4,
-			       HRTIMER_MODE_ABS_PINNED);
+	hrtimer_start(hrtimer, ns_to_ktime(expires - rem), HRTIMER_MODE_ABS_PINNED);
 }
 
 static void hardlockup_watchdog_enable(unsigned int cpu)
