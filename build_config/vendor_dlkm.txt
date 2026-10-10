@@ -10,7 +10,8 @@ slg51000-core.ko
 slg51002-core.ko
 usb_f_etr_miu.ko
 stmvl53l1.ko
-odpm-whi.ko
+odpm.ko
+exynos-hvm.ko
 pwm-exynos.ko
 rt4539_bl.ko
 aoc_unit_test_dev.ko

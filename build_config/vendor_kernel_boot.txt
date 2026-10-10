@@ -73,7 +73,7 @@ pixel_stat_sysfs.ko
 pixel_stat_mm.ko
 dbgcore-dump.ko
 exynos-seclog.ko
-pkvm-s2mpu.ko
+s2mpu.ko
 kernel-top.ko
 google_modemctl.ko
 pmic_class.ko
@@ -126,7 +126,9 @@ exynos-acme.ko
 exynos_mct.ko
 exynos_devfreq.ko
 gs_perf_mon.ko
-gs_governor_memlat.ko
+governor_memlat.ko
+memlat-devfreq.ko
+arm-memlat-mon.ko
 gs_governor_utils.ko
 bts.ko
 zram_gs.ko
