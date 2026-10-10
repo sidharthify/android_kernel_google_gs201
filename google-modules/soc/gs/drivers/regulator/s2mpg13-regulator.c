@@ -853,14 +853,13 @@ out_release_of_nodes:
 	return ret;
 }
 
-static int s2mpg13_pmic_remove(struct platform_device *pdev)
+static void s2mpg13_pmic_remove(struct platform_device *pdev)
 {
 #if IS_ENABLED(CONFIG_DRV_SAMSUNG_PMIC)
 	struct s2mpg13_pmic *s2mpg13 = platform_get_drvdata(pdev);
 
 	pmic_device_destroy(s2mpg13->dev->devt);
 #endif
-	return 0;
 }
 
 static void s2mpg13_pmic_shutdown(struct platform_device *pdev)
