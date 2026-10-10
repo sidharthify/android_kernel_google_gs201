@@ -117,6 +117,17 @@ int gxp_soc_pm_set_rate(unsigned int id, unsigned long rate)
 	return exynos_acpm_set_rate(id, rate);
 }
 
+/*
+ * The coherent fabric (BCI/DSU) QoS classes come from zuma. The 6.12 soc/gs
+ * pm_qos header only has the gs101/gs201 classes, and nothing on gs201
+ * serves them anyway.
+ */
+#ifdef PM_QOS_BCI_THROUGHPUT_DEFAULT_VALUE
+#define GXP_HAS_COHERENT_FABRIC_QOS 1
+#else
+#define GXP_HAS_COHERENT_FABRIC_QOS 0
+#endif
+
 unsigned long gxp_soc_pm_get_rate(struct gxp_dev *gxp, unsigned int id, unsigned long dbg_val)
 {
 	return exynos_acpm_get_rate(id, dbg_val);
@@ -126,14 +137,18 @@ void gxp_soc_pm_init(struct gxp_dev *gxp)
 {
 	exynos_pm_qos_add_request(&gxp->soc_data->int_min, PM_QOS_DEVICE_THROUGHPUT, 0);
 	exynos_pm_qos_add_request(&gxp->soc_data->mif_min, PM_QOS_BUS_THROUGHPUT, 0);
+#if GXP_HAS_COHERENT_FABRIC_QOS
 	exynos_pm_qos_add_request(&gxp->soc_data->bci_min, PM_QOS_BCI_THROUGHPUT, 0);
 	exynos_pm_qos_add_request(&gxp->soc_data->dsu_min, PM_QOS_DSU_THROUGHPUT, 0);
+#endif
 }
 
 void gxp_soc_pm_exit(struct gxp_dev *gxp)
 {
+#if GXP_HAS_COHERENT_FABRIC_QOS
 	exynos_pm_qos_remove_request(&gxp->soc_data->dsu_min);
 	exynos_pm_qos_remove_request(&gxp->soc_data->bci_min);
+#endif
 	exynos_pm_qos_remove_request(&gxp->soc_data->mif_min);
 	exynos_pm_qos_remove_request(&gxp->soc_data->int_min);
 }
@@ -152,8 +167,10 @@ void gxp_soc_pm_set_request(struct gxp_dev *gxp, enum gxp_soc_qos_request qos_re
 		pm_arg_decode(qos_request, value, &bci_val, &dsu_val);
 		dev_dbg(gxp->dev, "coherent_fabric_qos request - bci = %d dsu = %d\n", bci_val,
 			dsu_val);
+#if GXP_HAS_COHERENT_FABRIC_QOS
 		exynos_pm_qos_update_request(&gxp->soc_data->bci_min, bci_val);
 		exynos_pm_qos_update_request(&gxp->soc_data->dsu_min, dsu_val);
+#endif
 	} else {
 		dev_warn(gxp->dev, "Undefined QoS request: %u.", qos_request);
 	}
@@ -171,10 +188,15 @@ u64 gxp_soc_pm_get_request(struct gxp_dev *gxp, enum gxp_soc_qos_request qos_req
 						       &gxp->soc_data->mif_min);
 		return pm_arg_encode(qos_request, int_val, mif_val);
 	} else if (qos_request == COHERENT_FABRIC_QOS_REQ) {
+#if GXP_HAS_COHERENT_FABRIC_QOS
 		bci_val = exynos_pm_qos_read_req_value(PM_QOS_BCI_THROUGHPUT,
 						       &gxp->soc_data->bci_min);
 		dsu_val = exynos_pm_qos_read_req_value(PM_QOS_DSU_THROUGHPUT,
 						       &gxp->soc_data->dsu_min);
+#else
+		bci_val = 0;
+		dsu_val = 0;
+#endif
 		return pm_arg_encode(qos_request, bci_val, dsu_val);
 	}
 
@@ -186,8 +208,10 @@ void gxp_soc_pm_reset(struct gxp_dev *gxp)
 {
 	exynos_pm_qos_update_request(&gxp->soc_data->int_min, 0);
 	exynos_pm_qos_update_request(&gxp->soc_data->mif_min, 0);
+#if GXP_HAS_COHERENT_FABRIC_QOS
 	exynos_pm_qos_update_request(&gxp->soc_data->bci_min, 0);
 	exynos_pm_qos_update_request(&gxp->soc_data->dsu_min, 0);
+#endif
 }
 
 int gxp_soc_init(struct gxp_dev *gxp)
