@@ -2,7 +2,7 @@
 
 subdir-ccflags-y += \
 		-I$(KERNEL_SRC)/../private/google-modules/bms \
-		-I$(KERNEL_SRC)/drivers/thermal
+		-I$(srctree)/drivers/thermal
 
 ifneq ($(filter m, $(CONFIG_SOC_ZUMAPRO)),)
 # Only one of them exists at build time, depending on :radio flag.
