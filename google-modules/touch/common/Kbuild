@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 
 ccflags-y	+= -I$(src)/include
-ccflags-y	+= -I$(srctree)/../private/google-modules/display
-ccflags-y	+= -I$(srctree)/../private/google-modules/display/include/uapi
+ccflags-y	+= -I$(srctree)/private/google-modules/display
+ccflags-y	+= -I$(srctree)/private/google-modules/display/include/uapi
 
 CFLAGS_goog_touch_interface.o += -Wno-missing-prototypes
 CFLAGS_touch_bus_negotiator.o += -Wno-missing-prototypes
