@@ -2490,7 +2490,7 @@ int goog_get_firmware_name(struct device_node *node, int id, char *name, size_t 
 
 	err = of_property_read_string_index(node, "goog,firmware_names", id, &fw_name);
 	if (err == 0) {
-		strlcpy(name, fw_name, size);
+		strscpy(name, fw_name, size);
 		pr_info("%s: found firmware name: %s\n", __func__, name);
 	} else {
 		pr_warn("%s: Fail to find firmware name!\n", __func__);
@@ -3672,9 +3672,9 @@ int goog_offload_probe(struct goog_touch_interface *gti)
 		gti->v4l2.width, gti->v4l2.height, gti->v4l2_enabled);
 
 	if (!of_property_read_string(np, "goog,usb-psy-name", &usb_psy_name))
-		strlcpy(gti->usb_psy_name, usb_psy_name, sizeof(gti->usb_psy_name));
+		strscpy(gti->usb_psy_name, usb_psy_name, sizeof(gti->usb_psy_name));
 	else
-		strlcpy(gti->usb_psy_name, "usb", sizeof(gti->usb_psy_name));
+		strscpy(gti->usb_psy_name, "usb", sizeof(gti->usb_psy_name));
 
 	/* Register for charger plugging status */
 	gti->charger_notifier.notifier_call = gti_charger_state_change;
