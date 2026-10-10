@@ -76,7 +76,7 @@ endif
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 # TODO(b/368532067): Remove once tpu-ext.h is properly landed
 -include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
-M ?= $(srctree)/$(src)
+M ?= $(src)
 
 # Obtain the current git commit hash for logging on probe
 GIT_PATH=$(shell cd $(KERNEL_SRC); readlink -e $(M))

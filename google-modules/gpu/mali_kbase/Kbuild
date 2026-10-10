@@ -24,7 +24,7 @@
 ifeq ($(shell expr $(VERSION) \>= 6), 1)
     ifeq ($(VERSION), 6)
         ifeq ($(shell expr $(PATCHLEVEL) \< 13), 1)
-            src:=$(if $(patsubst /%,,$(src)),$(srctree)/$(src),$(src))
+            src:=$(if $(patsubst /%,,$(src)),$(src),$(src))
         else
             src:=$(if $(patsubst /%,,$(src)),$(realpath $(srcroot))/$(src),$(src))
         endif
@@ -32,7 +32,7 @@ ifeq ($(shell expr $(VERSION) \>= 6), 1)
         src:=$(if $(patsubst /%,,$(src)),$(realpath $(srcroot))/$(src),$(src))
     endif
 else
-    src:=$(if $(patsubst /%,,$(src)),$(srctree)/$(src),$(src))
+    src:=$(if $(patsubst /%,,$(src)),$(src),$(src))
 endif
 
 #

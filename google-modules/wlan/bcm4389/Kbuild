@@ -26,7 +26,7 @@ ifeq ($(KERNEL_SRC),)
  ifeq ($(srctree),.)
   BCMDHD_ROOT=$(src)
  else
-  BCMDHD_ROOT=$(srctree)/$(src)
+  BCMDHD_ROOT=$(src)
  endif
  $(warning : ** Regular in-tree build BCMDHD_ROOT=$(BCMDHD_ROOT)**)
 else

@@ -3,7 +3,7 @@ obj-m	+= janeiro.o
 CURRENT_DIR=$(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ccflags-y	+= -I$(CURRENT_DIR)/include
 
-GIT_PATH=$(srctree)/$(src)
+GIT_PATH=$(src)
 ifeq ($(shell git -C $(GIT_PATH) rev-parse --is-inside-work-tree),true)
 	GIT_REPO_STATE=$(shell (git -C $(GIT_PATH) status --porcelain | grep -q .) && echo -dirty)
 	ccflags-y	+= -DGIT_REPO_TAG=\"$(shell git -C $(GIT_PATH) rev-parse --short HEAD)$(GIT_REPO_STATE)\"

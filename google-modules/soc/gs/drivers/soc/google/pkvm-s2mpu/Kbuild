@@ -1,4 +1,4 @@
-subdir-ccflags-y += -I$(srctree)/$(src)
+subdir-ccflags-y += -I$(src)
 subdir-ccflags-y += -I$(srctree)/arch/arm64/kvm/hyp/include/
 
 obj-m += pkvm-s2mpu.o
