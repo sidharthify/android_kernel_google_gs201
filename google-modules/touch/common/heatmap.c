@@ -5,6 +5,8 @@
 #include <media/videobuf2-vmalloc.h>
 #include "heatmap.h"
 
+#undef dev_fmt
+#define dev_fmt(fmt) "gti: " fmt
 static const int FIRST_FREE_NODE = -1;
 
 /**
@@ -77,6 +79,10 @@ void heatmap_read(struct v4l2_heatmap *v4l2, uint64_t timestamp)
 	strength_t *data;
 	int total_bytes = v4l2->format.sizeimage;
 	bool read_success;
+	char index_tag[32] = {0};
+
+	if (v4l2->frame_index_enabled)
+		scnprintf(index_tag, sizeof(index_tag), "IDX=%llu", v4l2->frame_index);
 
 	if (!vb2_is_streaming(&v4l2->queue)) {
 		/* No need to read, no one is viewing the video */
@@ -115,10 +121,15 @@ void heatmap_read(struct v4l2_heatmap *v4l2, uint64_t timestamp)
 		 * slowness in the userspace for reading or
 		 * processing buffers.
 		 */
-		dev_warn(v4l2->parent_dev, "heatmap: No buffers available, dropping frame\n");
+		if (consecutive_frames_dropped == 0)
+			dev_warn(v4l2->parent_dev, "v4l2: No buffers available %s\n", index_tag);
 		consecutive_frames_dropped++;
 		spin_unlock(&v4l2->heatmap_lock);
 		return;
+	}
+	if (consecutive_frames_dropped > 1) {
+		dev_info(v4l2->parent_dev, "v4l2: unhandled frames=%u %s\n",
+				consecutive_frames_dropped, index_tag);
 	}
 	consecutive_frames_dropped = 0;
 	new_buf = list_entry(v4l2->heatmap_buffer_list.next,
@@ -128,7 +139,7 @@ void heatmap_read(struct v4l2_heatmap *v4l2, uint64_t timestamp)
 	vb2_buf = &new_buf->v4l2_vb.vb2_buf;
 	data = vb2_plane_vaddr(vb2_buf, 0);
 	if (!data) {
-		dev_err(v4l2->parent_dev, "heatmap: Error acquiring frame pointer\n");
+		dev_err(v4l2->parent_dev, "v4l2: Error acquiring frame pointer\n");
 		vb2_buffer_done(vb2_buf, VB2_BUF_STATE_ERROR);
 		spin_unlock(&v4l2->heatmap_lock);
 		return;
@@ -140,7 +151,7 @@ void heatmap_read(struct v4l2_heatmap *v4l2, uint64_t timestamp)
 	vb2_buffer_done(vb2_buf, VB2_BUF_STATE_DONE);
 	spin_unlock(&v4l2->heatmap_lock);
 }
-EXPORT_SYMBOL(heatmap_read);
+EXPORT_SYMBOL_GPL(heatmap_read);
 
 static void heatmap_buffer_queue(struct vb2_buffer *vb)
 {
@@ -208,22 +219,22 @@ static const struct vb2_queue heatmap_queue = {
 	.ops = &heatmap_queue_ops,
 	.mem_ops = &vb2_vmalloc_memops,
 	.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC,
-	.min_queued_buffers = 1,
+	.min_buffers_needed = 1,
 };
 
 static int heatmap_vidioc_querycap(struct file *file, void *priv,
 		struct v4l2_capability *cap)
 {
 	struct v4l2_heatmap *v4l2 = video_drvdata(file);
-	strscpy(cap->driver, v4l2->parent_dev->driver->name,
+	strlcpy(cap->driver, v4l2->parent_dev->driver->name,
 		sizeof(cap->driver));
-	if (v4l2->input_dev != NULL) {
-		strscpy(cap->card, v4l2->input_dev->name, sizeof(cap->card));
+	if (v4l2->input_dev != NULL && v4l2->input_dev->name != NULL) {
+		strlcpy(cap->card, v4l2->input_dev->name, sizeof(cap->card));
 	} else {
-		strscpy(cap->card, KBUILD_MODNAME, sizeof(cap->card));
+		strlcpy(cap->card, KBUILD_MODNAME, sizeof(cap->card));
 	}
 
-	strscpy(cap->bus_info, dev_name(v4l2->parent_dev),
+	strlcpy(cap->bus_info, dev_name(v4l2->parent_dev),
 		sizeof(cap->bus_info));
 	cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_TOUCH |
 		V4L2_CAP_READWRITE | V4L2_CAP_STREAMING | V4L2_CAP_DEVICE_CAPS;
@@ -237,7 +248,7 @@ static int heatmap_vidioc_enum_input(struct file *file, void *priv,
 		return -EINVAL;
 
 	video_input->type = V4L2_INPUT_TYPE_TOUCH;
-	strscpy(video_input->name, "strength", sizeof(video_input->name));
+	strlcpy(video_input->name, "strength", sizeof(video_input->name));
 	return 0;
 }
 
@@ -345,8 +356,8 @@ int heatmap_probe(struct v4l2_heatmap *v4l2)
 	}
 
 	/* register video device */
-	strscpy(v4l2->device.name, dev_name(v4l2->parent_dev),
-		sizeof(v4l2->device.name));
+	strlcpy(v4l2->device.name, dev_name(v4l2->parent_dev),
+		V4L2_DEVICE_NAME_SIZE);
 	error = v4l2_device_register(v4l2->parent_dev, &v4l2->device);
 	if (error)
 		goto err_free_frame_storage;
@@ -392,7 +403,7 @@ err_free_frame_storage:
 err_probe:
 	return error;
 }
-EXPORT_SYMBOL(heatmap_probe);
+EXPORT_SYMBOL_GPL(heatmap_probe);
 
 void heatmap_remove(struct v4l2_heatmap *v4l2)
 {
@@ -408,7 +419,7 @@ void heatmap_remove(struct v4l2_heatmap *v4l2)
 		v4l2->frame = NULL;
 	}
 }
-EXPORT_SYMBOL(heatmap_remove);
+EXPORT_SYMBOL_GPL(heatmap_remove);
 
 MODULE_DESCRIPTION("Touchscreen heatmap video device");
 MODULE_AUTHOR("Siarhei Vishniakou <svv@google.com>");

@@ -41,46 +41,31 @@ static int touch_offload_release(struct inode *inode, struct file *file)
 }
 
 static int pack_frame(struct touch_offload_context *context,
-		      struct touch_offload_frame *frame, char **packed)
+		      struct touch_offload_frame *frame, u8 **packed)
 {
-	/* TODO: compute precise size of a packed frame */
-	int max_packed_frame_size =
-		sizeof(struct touch_offload_frame) +
-		TOUCH_OFFLOAD_DATA_SIZE_2D(context->caps.rx_size,
-					   context->caps.tx_size) *
-		MAX_CHANNELS;
-	/* TODO: preallocate memory for a single packed frame */
-	char *packed_mem = NULL;
-	char *ptr = NULL;
+	u8 *ptr = context->prealloc_packed_frame;
 	int channel_size;
 	int i = 0;
 
-	if (!frame || frame->num_channels > MAX_CHANNELS)
+	if (!ptr || !frame || frame->num_channels > MAX_CHANNELS)
 		return -EINVAL;
 
-	packed_mem = kzalloc(max_packed_frame_size, GFP_KERNEL);
-	if (packed_mem == NULL)
-		return -ENOMEM;
-	ptr = packed_mem;
-
 	/* Copy the header */
-
 	memcpy(ptr, &frame->header, sizeof(frame->header));
 	ptr += sizeof(frame->header);
 
 	/* Copy frame data */
-
 	for (i = 0; i < frame->num_channels; i++) {
 		if (frame->channel_type[i] == TOUCH_DATA_TYPE_COORD)
 			channel_size = TOUCH_OFFLOAD_FRAME_SIZE_COORD;
 		else if ((frame->channel_type[i] & TOUCH_SCAN_TYPE_MUTUAL) != 0)
 			channel_size =
-			    TOUCH_OFFLOAD_FRAME_SIZE_2D(context->caps.rx_size,
-							context->caps.tx_size);
+			    TOUCH_OFFLOAD_FRAME_SIZE_2D(context->caps.heatmap_height,
+							context->caps.heatmap_width);
 		else if ((frame->channel_type[i] & TOUCH_SCAN_TYPE_SELF) != 0)
 			channel_size =
-			    TOUCH_OFFLOAD_FRAME_SIZE_1D(context->caps.rx_size,
-							context->caps.tx_size);
+			    TOUCH_OFFLOAD_FRAME_SIZE_1D(context->caps.heatmap_height,
+							context->caps.heatmap_width);
 		else if (frame->channel_type[i] ==
 				CONTEXT_CHANNEL_TYPE_DRIVER_STATUS)
 			channel_size = TOUCH_OFFLOAD_FRAME_SIZE_DRIVER_STATUS;
@@ -90,15 +75,14 @@ static int pack_frame(struct touch_offload_context *context,
 		else {
 			pr_err("%s: Invalid channel_type = 0x%08X", __func__,
 			       frame->channel_type[i]);
-			kfree(packed_mem);
 			return -EINVAL;
 		}
 		memcpy(ptr, frame->channel_data[i], channel_size);
 		ptr += channel_size;
 	}
 
-	*packed = packed_mem;
-	return (ptr - packed_mem);
+	*packed = context->prealloc_packed_frame;
+	return (ptr - *packed);
 }
 
 static ssize_t touch_offload_read(struct file *file, char __user *user_buffer,
@@ -132,7 +116,6 @@ static ssize_t touch_offload_read(struct file *file, char __user *user_buffer,
 	    *offset == context->packed_frame_size) {
 		pr_err("%s: [Unexpected!] The buffer should have been recycled after the previous read.\n",
 		       __func__);
-		kfree(context->packed_frame);
 		context->packed_frame = NULL;
 		*offset = 0;
 		mutex_unlock(&context->buffer_lock);
@@ -187,7 +170,6 @@ static ssize_t touch_offload_read(struct file *file, char __user *user_buffer,
 
 	/* Recycle the frame if transfer was complete */
 	if (*offset == context->packed_frame_size) {
-		kfree(context->packed_frame);
 		context->packed_frame = NULL;
 		*offset = 0;
 	}
@@ -224,6 +206,11 @@ static int touch_offload_allocate_buffers(struct touch_offload_context *context,
 	int num_channels;
 	__u32 mask;
 	__u32 size = 0;
+	int max_packed_frame_size =
+		sizeof(struct touch_offload_frame) +
+		TOUCH_OFFLOAD_DATA_SIZE_2D(context->caps.heatmap_height,
+					   context->caps.heatmap_width) *
+		MAX_CHANNELS;
 
 	pr_debug("%s\n", __func__);
 
@@ -239,6 +226,13 @@ static int touch_offload_allocate_buffers(struct touch_offload_context *context,
 
 
 	mutex_lock(&context->buffer_lock);
+	context->prealloc_packed_frame =
+		devm_kzalloc(context->device, max_packed_frame_size, GFP_KERNEL);
+	if (context->prealloc_packed_frame == NULL) {
+		mutex_unlock(&context->buffer_lock);
+		return -ENOMEM;
+	}
+	context->prealloc_packed_frame_size = max_packed_frame_size;
 
 	/* Add new buffers to the free_pool */
 	for (i = 0; i < nb; i++) {
@@ -279,8 +273,8 @@ static int touch_offload_allocate_buffers(struct touch_offload_context *context,
 				frame->channel_type[chan] =
 				    TOUCH_SCAN_TYPE_MUTUAL | mask;
 				size = TOUCH_OFFLOAD_FRAME_SIZE_2D(
-						context->caps.rx_size,
-						context->caps.tx_size);
+						context->caps.heatmap_height,
+						context->caps.heatmap_width);
 				frame->channel_data[chan] = kzalloc(size,
 								    GFP_KERNEL);
 				if (frame->channel_data[chan] == NULL)
@@ -302,8 +296,8 @@ static int touch_offload_allocate_buffers(struct touch_offload_context *context,
 				frame->channel_type[chan] =
 					TOUCH_SCAN_TYPE_SELF | mask;
 				size = TOUCH_OFFLOAD_FRAME_SIZE_1D(
-						context->caps.rx_size,
-						context->caps.tx_size);
+						context->caps.heatmap_height,
+						context->caps.heatmap_width);
 				frame->channel_data[chan] = kzalloc(size,
 								GFP_KERNEL);
 				if (frame->channel_data[chan] == NULL)
@@ -474,7 +468,6 @@ static long touch_offload_ioctl(struct file *file, unsigned int ioctl_num,
 	case TOUCH_OFFLOAD_IOC_WR_CONFIGURE:
 	{
 		struct TouchOffloadIocConfigure configure;
-		int NUM_BUFFERS = 4;
 		int num_channels;
 
 		err = copy_from_user(&configure, (void *)ioctl_param,
@@ -550,7 +543,7 @@ static long touch_offload_ioctl(struct file *file, unsigned int ioctl_num,
 		       sizeof(context->config));
 
 		/* Allocate frames */
-		err = touch_offload_allocate_buffers(context, NUM_BUFFERS);
+		err = touch_offload_allocate_buffers(context, TOUCH_OFFLOAD_BUFFER_NUM);
 		if (err != 0) {
 			pr_err("%s: failed to allocate buffers. err = 0x%08X.\n",
 			       __func__, (unsigned int)err);
@@ -622,7 +615,7 @@ int touch_offload_reserve_frame(struct touch_offload_context *context,
 
 	return ret;
 }
-EXPORT_SYMBOL(touch_offload_reserve_frame);
+EXPORT_SYMBOL_GPL(touch_offload_reserve_frame);
 
 int touch_offload_queue_frame(struct touch_offload_context *context,
 			      struct touch_offload_frame *frame)
@@ -653,7 +646,7 @@ int touch_offload_queue_frame(struct touch_offload_context *context,
 
 	return ret;
 }
-EXPORT_SYMBOL(touch_offload_queue_frame);
+EXPORT_SYMBOL_GPL(touch_offload_queue_frame);
 
 int touch_offload_init(struct touch_offload_context *context)
 {
@@ -697,7 +690,7 @@ int touch_offload_init(struct touch_offload_context *context)
 		goto err_cdev_add;
 	}
 
-	context->cls = class_create(context->device_name);
+	context->cls = class_create(THIS_MODULE, context->device_name);
 	if (IS_ERR(context->cls)) {
 		pr_err("%s: class_create failed with error = %ld.\n",
 		       __func__, PTR_ERR(context->cls));
@@ -724,7 +717,7 @@ err_cdev_add:
 	unregister_chrdev_region(context->dev_num, 1);
 	return ret;
 }
-EXPORT_SYMBOL(touch_offload_init);
+EXPORT_SYMBOL_GPL(touch_offload_init);
 
 int touch_offload_cleanup(struct touch_offload_context *context)
 {
@@ -744,7 +737,7 @@ int touch_offload_cleanup(struct touch_offload_context *context)
 
 	return 0;
 }
-EXPORT_SYMBOL(touch_offload_cleanup);
+EXPORT_SYMBOL_GPL(touch_offload_cleanup);
 
 MODULE_DESCRIPTION("Touch Offload to AP");
 MODULE_AUTHOR("Steve Pfetsch <spfetsch@google.com>");
