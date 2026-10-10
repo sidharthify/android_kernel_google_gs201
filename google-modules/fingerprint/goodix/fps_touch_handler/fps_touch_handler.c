@@ -902,7 +902,7 @@ end:
 	return rc;
 }
 
-static int fth_remove(struct platform_device *pdev)
+static void fth_remove(struct platform_device *pdev)
 {
 	struct fth_drvdata *drvdata = platform_get_drvdata(pdev);
 #if IS_ENABLED(CONFIG_GOOG_TOUCH_INTERFACE)
@@ -916,7 +916,6 @@ static int fth_remove(struct platform_device *pdev)
 	unregister_chrdev_region(drvdata->fth_fd_cdev.dev, 1);
 	device_init_wakeup(&pdev->dev, 0);
 	input_unregister_handler(&fth_touch_handler);
-	return 0;
 }
 
 static const struct of_device_id fth_match[] = {
