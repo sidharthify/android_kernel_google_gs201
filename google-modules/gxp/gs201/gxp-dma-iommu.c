@@ -35,8 +35,7 @@ struct gxp_dma_iommu_manager {
 static int iommu_fault_handler(struct iommu_domain *domain, struct device *dev,
 			       unsigned long iova, int flags, void *token)
 {
-	dev_err(dev, "IOMMU fault on address %08lX, flags = %08X
-", iova, flags);
+	dev_err(dev, "IOMMU fault on address %08lX, flags = %08X\n", iova, flags);
 
 	/* Tell the IOMMU driver we are OK with this fault. */
 	return 0;
