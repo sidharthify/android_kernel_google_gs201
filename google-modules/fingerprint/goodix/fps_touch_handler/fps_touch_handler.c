@@ -780,7 +780,7 @@ static int fth_dev_register(struct fth_drvdata *drvdata)
 		pr_err("cdev_add failed for fd %d\n", ret);
 		goto err_cdev_add;
 	}
-	drvdata->fth_class = class_create(THIS_MODULE, drvdata->fth_node);
+	drvdata->fth_class = class_create(drvdata->fth_node);
 	if (IS_ERR(drvdata->fth_class)) {
 		ret = PTR_ERR(drvdata->fth_class);
 		pr_err("class_create failed %d\n", ret);
