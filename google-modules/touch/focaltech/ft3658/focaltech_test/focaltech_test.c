@@ -1527,7 +1527,7 @@ void fts_test_save_data(char *name, int code, int *data, int datacnt,
         return ;
     }
 
-    strlcpy(info->name, name, TEST_ITEM_NAME_MAX - 1);
+    strscpy(info->name, name, TEST_ITEM_NAME_MAX - 1);
     info->code = code;
     info->mc_sc = mc_sc;
     info->key_support = key;
