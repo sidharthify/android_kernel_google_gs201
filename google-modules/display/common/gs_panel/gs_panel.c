@@ -15,6 +15,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of_graph.h>
 #include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/version.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_probe_helper.h>

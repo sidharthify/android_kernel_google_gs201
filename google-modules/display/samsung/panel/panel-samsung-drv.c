@@ -238,6 +238,27 @@ static void exynos_panel_update_te2(struct exynos_panel *ctx)
 	funcs->update_te2(ctx);
 }
 
+/* GPIO_ACTIVE_LOW in the devicetree gpio flags cell */
+#define RDY_GPIO_FLAG_ACTIVE_LOW	BIT(0)
+
+/*
+ * of_get_named_gpio_flags() is gone since Linux 6.2. The rdy-gpios flags only
+ * matter for their active-low bit, so read it from the phandle args directly.
+ */
+static bool exynos_panel_rdy_gpio_active_low(struct device_node *np)
+{
+	struct of_phandle_args args;
+	bool active_low;
+
+	if (of_parse_phandle_with_args(np, "rdy-gpios", "#gpio-cells", 0, &args))
+		return false;
+
+	active_low = args.args_count > 1 && (args.args[1] & RDY_GPIO_FLAG_ACTIVE_LOW);
+	of_node_put(args.np);
+
+	return active_low;
+}
+
 static int exynos_panel_parse_gpios(struct exynos_panel *ctx)
 {
 	struct device *dev = ctx->dev;
@@ -277,8 +298,8 @@ static int exynos_panel_parse_gpios(struct exynos_panel *ctx)
 	if (IS_ERR(ctx->vddd_gpio))
 		ctx->vddd_gpio = NULL;
 
-	ctx->ready_signal.gpio = of_get_named_gpio_flags(dev->of_node, "rdy-gpios", 0,
-							 &ctx->ready_signal.gpio_flags);
+	ctx->ready_signal.gpio = of_get_named_gpio(dev->of_node, "rdy-gpios", 0);
+	ctx->ready_signal.active_low = exynos_panel_rdy_gpio_active_low(dev->of_node);
 
 	dev_dbg(ctx->dev, "%s -\n", __func__);
 	return 0;
@@ -567,7 +588,7 @@ static int exynos_panel_wait_ready(struct exynos_panel *ctx)
 	enable_irq(ctx->ready_signal.irq);
 
 	/* expected ready pin active value */
-	rdy_active_val = (ctx->ready_signal.gpio_flags & OF_GPIO_ACTIVE_LOW) == 0;
+	rdy_active_val = !ctx->ready_signal.active_low;
 	timeout_ms = (ctx->desc && ctx->desc->rdy_timeout_ms) ? ctx->desc->rdy_timeout_ms :
 								PANEL_READY_TIMEOUT_MS;
 
@@ -909,7 +930,7 @@ static int exynos_panel_register_irqs(struct exynos_panel *ctx)
 		irq = ret;
 		irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
 		ret = devm_request_irq(ctx->dev, irq, panel_rdy_irq_handler,
-				       (ctx->ready_signal.gpio_flags & OF_GPIO_ACTIVE_LOW ?
+				       (ctx->ready_signal.active_low ?
 						IRQF_TRIGGER_FALLING :
 						IRQF_TRIGGER_RISING),
 				       pdev->name, ctx);
@@ -921,7 +942,7 @@ static int exynos_panel_register_irqs(struct exynos_panel *ctx)
 
 		ctx->ready_signal.irq = irq;
 		dev_info(ctx->dev, "Request rdy irq number(%d) okay (%sING_TRIGGER)\n", irq,
-			 (ctx->ready_signal.gpio_flags & OF_GPIO_ACTIVE_LOW ? "FALL" : "RIS"));
+			 (ctx->ready_signal.active_low ? "FALL" : "RIS"));
 	} else {
 		/* Panel doesn't have the ready pin */
 		ctx->ready_signal.irq = -ENOENT;

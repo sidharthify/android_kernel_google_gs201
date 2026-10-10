@@ -776,7 +776,7 @@ struct te2_data {
 struct ready_signal_t {
 	int gpio;
 	int irq;
-	enum of_gpio_flags gpio_flags;
+	bool active_low;
 	struct completion detected;
 };
 
