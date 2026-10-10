@@ -490,7 +490,6 @@ static void s6e3hc3_c10_update_refresh_mode(struct exynos_panel *ctx,
 	 */
 	ctx->panel_idle_vrefresh = idle_vrefresh;
 	s6e3hc3_c10_update_panel_feat(ctx, pmode, false);
-	te2_state_changed(ctx->bl);
 	notify_panel_mode_changed(ctx, false);
 }
 
@@ -620,7 +619,7 @@ static int s6e3hc3_c10_atomic_check(struct exynos_panel *ctx, struct drm_atomic_
 	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
 	struct s6e3hc3_c10_panel *spanel = to_spanel(ctx);
 
-	if (drm_mode_vrefresh(&ctx->current_mode->mode) == 120 ||
+	if (!ctx->current_mode || drm_mode_vrefresh(&ctx->current_mode->mode) == 120 ||
 	    !new_conn_state || !new_conn_state->crtc)
 		return 0;
 
@@ -856,7 +855,7 @@ static bool s6e3hc3_c10_update_idle_state(struct exynos_panel *ctx)
 /* TODO: move update te2 to common display driver for other panel drivers */
 static void s6e3hc3_c10_commit_done(struct exynos_panel *ctx)
 {
-	if (!ctx->enabled || !ctx->current_mode)
+	if (!ctx->enabled || ctx->current_mode->exynos_mode.is_lp_mode)
 		return;
 
 	if (s6e3hc3_c10_update_idle_state(ctx))
@@ -966,6 +965,9 @@ static int s6e3hc3_c10_set_op_hz(struct exynos_panel *ctx, unsigned int hz)
 	struct s6e3hc3_c10_panel *spanel = to_spanel(ctx);
 	u32 vrefresh = drm_mode_vrefresh(&ctx->current_mode->mode);
 
+	if (!is_panel_active(ctx))
+		return -EPERM;
+
 	if (vrefresh > hz) {
 		dev_err(ctx->dev, "invalid op_hz=%d for vrefresh=%d\n",
 			hz, vrefresh);
@@ -1010,7 +1012,6 @@ static const int s6e3hc3_c10_lp_vrefresh_range[] = {
 
 static const struct exynos_panel_mode s6e3hc3_c10_modes[] = {
 	{
-		/* 1440x3120 @ 60Hz */
 		.mode = {
 			.name = "1440x3120x60",
 			.clock = 298620,
@@ -1045,7 +1046,6 @@ static const struct exynos_panel_mode s6e3hc3_c10_modes[] = {
 		.idle_mode = IDLE_MODE_ON_SELF_REFRESH,
 	},
 	{
-		/* 1440x3120 @ 120Hz */
 		.mode = {
 			.name = "1440x3120x120",
 			.clock = 597240,
@@ -1080,7 +1080,6 @@ static const struct exynos_panel_mode s6e3hc3_c10_modes[] = {
 		.idle_mode = IDLE_MODE_ON_INACTIVITY,
 	},
 	{
-		/* 1080x2340 @ 60Hz */
 		.mode = {
 			.name = "1080x2340x60",
 			.clock = 173484,
@@ -1115,7 +1114,6 @@ static const struct exynos_panel_mode s6e3hc3_c10_modes[] = {
 		.idle_mode = IDLE_MODE_ON_SELF_REFRESH,
 	},
 	{
-		/* 1080x2340 @ 120Hz */
 		.mode = {
 			.name = "1080x2340x120",
 			.clock = 346968,
@@ -1154,7 +1152,6 @@ static const struct exynos_panel_mode s6e3hc3_c10_modes[] = {
 static const struct exynos_panel_mode s6e3hc3_c10_lp_modes[] = {
 	{
 		.mode = {
-			/* 1440x3120 @ 30Hz */
 			.name = "1440x3120x30",
 			.clock = 149310,
 			.hdisplay = 1440,
@@ -1185,7 +1182,6 @@ static const struct exynos_panel_mode s6e3hc3_c10_lp_modes[] = {
 	},
 	{
 		.mode = {
-			/* 1080x2340 @ 30Hz */
 			.name = "1080x2340x30",
 			.clock = 86742,
 			.hdisplay = 1080,
@@ -1343,7 +1339,7 @@ const struct exynos_panel_desc samsung_s6e3hc3_c10 = {
 	.binned_lp = s6e3hc3_c10_binned_lp,
 	.num_binned_lp = ARRAY_SIZE(s6e3hc3_c10_binned_lp),
 	.is_panel_idle_supported = true,
-	.vrr_switch_duration = 1,
+	.rr_switch_duration = 1,
 	.panel_func = &s6e3hc3_c10_drm_funcs,
 	.exynos_panel_func = &s6e3hc3_c10_exynos_funcs,
 };

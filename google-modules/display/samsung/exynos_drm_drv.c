@@ -26,6 +26,7 @@
 #include <drm/drm_vblank.h>
 
 #include <drm/exynos_drm.h>
+#include <drm/samsung_drm.h>
 
 #include "exynos_drm_crtc.h"
 #include "exynos_drm_connector.h"
@@ -37,6 +38,10 @@
 #include "exynos_drm_plane.h"
 #include "exynos_drm_writeback.h"
 #include "exynos_drm_dqe.h"
+
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+#include "gs_drm/gs_drm_connector.h"
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/dpu_trace.h>
@@ -50,6 +55,88 @@
 #define EXYNOS_DRM_WAIT_FENCE_TIMEOUT_MS 250
 
 EXPORT_TRACEPOINT_SYMBOL(tracing_mark_write);
+EXPORT_TRACEPOINT_SYMBOL(dsi_label_scope);
+
+static void exynos_drm_drv_set_lhbm_hist_helper(struct histogram_channel_config *cfg,
+						struct histogram_roi *roi,
+						struct histogram_weights *weight)
+{
+	/*
+	 * HIST_THRESHOLD 1 ~ 1023 Histogram threshold
+	 */
+	memcpy(&cfg->weights, weight, sizeof(cfg->weights));
+	memcpy(&cfg->roi, roi, sizeof(cfg->roi));
+	/* rounded up with min value of 1 (threshold range: 1 ~ 1023)*/
+	cfg->threshold = ((roi->hsize * roi->vsize) >> 16) + 1;
+	cfg->pos = POST_DQE;
+}
+
+/* connector->base.dev->mode_config.connection_mutex should be acquired at calling this function */
+int exynos_drm_drv_set_lhbm_hist(struct exynos_drm_connector *connector, int x, int y, int w, int h)
+{
+	struct drm_crtc *crtc = NULL;
+	struct exynos_drm_crtc *exynos_crtc;
+	struct decon_device *decon;
+	struct histogram_channel_config *cfg;
+	struct histogram_roi roi = { .start_x = x, .start_y = y, .hsize = w, .vsize = h };
+
+	if (connector->base.state)
+		crtc = connector->base.state->crtc;
+	if (!crtc)
+		return -EIO;
+
+	exynos_crtc = to_exynos_crtc(crtc);
+	decon = (struct decon_device *)exynos_crtc->ctx;
+	if (!decon || !decon->dqe)
+		return -EIO;
+	cfg = &decon->dqe->lhbm_hist_config;
+
+	exynos_drm_drv_set_lhbm_hist_helper(cfg, &roi, &lhbm_hist_weight[LHBM_CIRCLE_WEIGHT]);
+	pr_debug("%s: set lhbm histogram config (x=%d, y=%d, w=%d, h=%d)\n", crtc->name, x, y, w, h);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(exynos_drm_drv_set_lhbm_hist);
+
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+int exynos_drm_drv_set_lhbm_hist_gs(struct decon_device *decon, struct histogram_roi *roi,
+				    struct histogram_weights *weight)
+{
+	struct histogram_channel_config *cfg;
+
+	if (!decon || !decon->dqe)
+		return -EIO;
+	cfg = &decon->dqe->lhbm_hist_config;
+
+	exynos_drm_drv_set_lhbm_hist_helper(cfg, roi, weight);
+	pr_debug(
+		"%s: set lhbm histogram config (x=%d, y=%d, w=%d, h=%d weight(R=%d, B=%d, B=%d))\n",
+		decon->crtc->base.name, roi->start_x, roi->start_y, roi->hsize, roi->vsize,
+		weight->weight_r, weight->weight_g, weight->weight_b);
+	decon->dqe->lhbm_hist_configured = true;
+
+	return 0;
+}
+#endif
+
+int exynos_drm_drv_get_lhbm_gray_level(struct exynos_drm_connector *conn)
+{
+	struct drm_crtc *crtc = NULL;
+	struct exynos_drm_crtc *exynos_crtc;
+	struct decon_device *decon;
+
+	if (conn->base.state)
+		crtc = conn->base.state->crtc;
+	if (!crtc)
+		return 0;
+
+	exynos_crtc = to_exynos_crtc(crtc);
+	decon = (struct decon_device *)exynos_crtc->ctx;
+	if (!decon || !decon->dqe)
+		return 0;
+	return decon->dqe->lhbm_gray_level;
+}
+EXPORT_SYMBOL_GPL(exynos_drm_drv_get_lhbm_gray_level);
 
 static struct exynos_drm_priv_state *exynos_drm_get_priv_state(struct drm_atomic_state *state)
 {
@@ -58,8 +145,8 @@ static struct exynos_drm_priv_state *exynos_drm_get_priv_state(struct drm_atomic
 	struct drm_private_state *priv_state;
 
 	priv_state = drm_atomic_get_private_obj_state(state, &priv->obj);
-	if (IS_ERR(priv))
-		return ERR_CAST(priv);
+	if (IS_ERR(priv_state))
+		return ERR_CAST(priv_state);
 
 	return to_exynos_priv_state(priv_state);
 }
@@ -230,16 +317,29 @@ static void exynos_atomic_prepare_partial_update(struct drm_atomic_state *state)
 			continue;
 
 		if (drm_atomic_crtc_needs_modeset(new_crtc_state)) {
-			const struct exynos_drm_connector_state *exynos_conn_state =
-				crtc_get_exynos_connector_state(state, new_crtc_state);
-
-			if (exynos_conn_state) {
+			const struct drm_connector_state *conn_state =
+				crtc_get_phys_connector_state(state, new_crtc_state);
+			if (conn_state && is_exynos_drm_connector(conn_state->connector)) {
 				const struct exynos_display_partial *p =
-					&exynos_conn_state->partial;
+					&to_exynos_connector_state(conn_state)->partial;
 
 				decon->partial = exynos_partial_initialize(decon,
 						p, &new_crtc_state->mode);
 			}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+			else if (conn_state && is_gs_drm_connector(conn_state->connector)) {
+				const struct gs_drm_connector_state *gs_conn_state =
+					to_gs_connector_state(conn_state);
+				const struct exynos_display_partial p = {
+					.enabled = gs_conn_state->partial.enabled,
+					.min_width = gs_conn_state->partial.min_width,
+					.min_height = gs_conn_state->partial.min_height,
+				};
+
+				decon->partial =
+					exynos_partial_initialize(decon, &p, &new_crtc_state->mode);
+			}
+#endif
 		}
 
 		partial = decon->partial;
@@ -283,7 +383,6 @@ static int exynos_add_relevant_connectors(struct drm_atomic_state *state)
 	struct drm_connector *connector;
 	struct drm_connector_state *conn_state;
 	struct drm_connector_list_iter conn_iter;
-	const struct exynos_drm_connector *exynos_connector;
 	u32 connector_mask = 0;
 	int ret = 0;
 	int i;
@@ -300,18 +399,37 @@ static int exynos_add_relevant_connectors(struct drm_atomic_state *state)
 		if (!(connector_mask & drm_connector_mask(connector)))
 			continue;
 
-		if (!is_exynos_drm_connector(connector))
-			continue;
+		if (is_exynos_drm_connector(connector)) {
+			const struct exynos_drm_connector *exynos_connector =
+					to_exynos_connector(connector);
 
-		exynos_connector = to_exynos_connector(connector);
-		if (!exynos_connector->needs_commit)
-			continue;
+			if (!exynos_connector->needs_commit)
+				continue;
 
-		conn_state = drm_atomic_get_connector_state(state, connector);
-		if (IS_ERR(conn_state)) {
-			ret = PTR_ERR(conn_state);
-			break;
+			conn_state = drm_atomic_get_connector_state(state, connector);
+			if (IS_ERR(conn_state)) {
+				ret = PTR_ERR(conn_state);
+				break;
+			}
 		}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+		else if (is_gs_drm_connector(connector)) {
+			const struct gs_drm_connector *gs_connector =
+					to_gs_connector(connector);
+
+			if (!gs_connector->needs_commit)
+				continue;
+
+			conn_state = drm_atomic_get_connector_state(state, connector);
+			if (IS_ERR(conn_state)) {
+				ret = PTR_ERR(conn_state);
+				break;
+			}
+		}
+#endif
+		else
+			continue;
+
 	}
 	drm_connector_list_iter_end(&conn_iter);
 
@@ -546,6 +664,11 @@ static void exynos_atomic_queue_work(struct drm_atomic_state *old_state)
 		struct decon_device *decon = crtc_to_decon(crtc);
 		struct kthread_work *work = &to_exynos_crtc_state(old_crtc_state)->commit_work;
 
+		if (decon->hibernation && old_crtc_state->active) {
+			hibernation_block(decon->hibernation);
+			hibernation_unblock_enter(decon->hibernation);
+		}
+
 		kthread_init_work(work, commit_kthread_work);
 		kthread_queue_work(&decon->worker, work);
 
@@ -656,16 +779,22 @@ int exynos_atomic_enter_tui(void)
 	struct drm_modeset_acquire_ctx ctx;
 	struct drm_plane_state *plane_state;
 	struct drm_plane *plane;
+	struct drm_connector_state *conn_state;
 	struct drm_crtc_state *crtc_state;
 	struct drm_crtc *crtc;
 	u32 tui_crtc_mask = 0;
 	struct exynos_drm_private *private = drm_to_exynos_dev(dev);
-	struct exynos_drm_connector_state *exynos_conn_state;
 
 	pr_debug("%s +\n", __func__);
 
 	if (private->tui_enabled)
 		return -EBUSY;
+
+	if (mutex_trylock(&private->dp_tui_lock) == 0) {
+		/* DP connection is active, bail out */
+		pr_info("%s: unable to enter TUI, DP is active\n", __func__);
+		return -EBUSY;
+	}
 
 	drm_for_each_crtc(crtc, dev) {
 		decon = crtc_to_decon(crtc);
@@ -675,8 +804,10 @@ int exynos_atomic_enter_tui(void)
 	DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, 0, ret);
 
 	state = drm_atomic_helper_duplicate_state(dev, &ctx);
-	if (IS_ERR(state))
+	if (IS_ERR(state)) {
+		ret = -ENOMEM;
 		goto err_dup;
+	}
 
 	mode_config->suspend_state = state;
 
@@ -713,17 +844,31 @@ int exynos_atomic_enter_tui(void)
 		if (ret)
 			goto err;
 
-		exynos_conn_state = crtc_get_exynos_connector_state(state, crtc_state);
-		if (exynos_conn_state) {
-			exynos_conn_state->blanked_mode = true;
+		conn_state = crtc_get_phys_connector_state(state, crtc_state);
 
-			if (exynos_conn_state->base.self_refresh_aware) {
+		if (conn_state) {
+			if (conn_state->self_refresh_aware) {
 				struct exynos_drm_crtc_state *exynos_crtc_state =
 					to_exynos_crtc_state(crtc_state);
 
 				exynos_crtc_state->bypass = true;
 				crtc_state->self_refresh_active = true;
 			}
+
+			if (is_exynos_drm_connector(conn_state->connector)) {
+				struct exynos_drm_connector_state *exynos_conn_state =
+					to_exynos_connector_state(conn_state);
+
+				exynos_conn_state->blanked_mode = true;
+			}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+			else if (is_gs_drm_connector(conn_state->connector)) {
+				struct gs_drm_connector_state *gs_conn_state =
+					to_gs_connector_state(conn_state);
+
+				gs_conn_state->blanked_mode = true;
+			}
+#endif
 		}
 	}
 
@@ -757,6 +902,8 @@ err_state_alloc:
 		mode_config->suspend_state = NULL;
 	}
 err_dup:
+	if (ret)
+		mutex_unlock(&private->dp_tui_lock);
 	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
 	pr_debug("%s -\n", __func__);
 
@@ -821,6 +968,7 @@ int exynos_atomic_exit_tui(void)
 	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
 	if (!ret)
 		drm_atomic_state_put(state);
+	mutex_unlock(&private->dp_tui_lock);
 
 	pr_debug("%s -\n", __func__);
 	return ret;
@@ -849,11 +997,14 @@ static void exynos_drm_postclose(struct drm_device *dev, struct drm_file *file)
 static const struct drm_ioctl_desc exynos_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(EXYNOS_HISTOGRAM_REQUEST, histogram_request_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(EXYNOS_HISTOGRAM_CANCEL, histogram_cancel_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(EXYNOS_HISTOGRAM_CHANNEL_REQUEST, histogram_channel_request_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(EXYNOS_HISTOGRAM_CHANNEL_CANCEL, histogram_channel_cancel_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(EXYNOS_CONTEXT_HISTOGRAM_EVENT_REQUEST, histogram_event_request_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(EXYNOS_CONTEXT_HISTOGRAM_EVENT_CANCEL, histogram_event_cancel_ioctl, 0),
 };
 
 static const struct file_operations exynos_drm_driver_fops = {
 	.owner		= THIS_MODULE,
-	.fop_flags	= FOP_UNSIGNED_OFFSET,
 	.open		= drm_open,
 	.mmap		= exynos_drm_gem_mmap,
 	.poll		= drm_poll,
@@ -870,6 +1021,8 @@ static struct drm_driver exynos_drm_driver = {
 	.postclose		   = exynos_drm_postclose,
 	.dumb_create		   = exynos_drm_gem_dumb_create,
 	.dumb_map_offset	   = exynos_drm_gem_dumb_map_offset,
+	.prime_handle_to_fd	   = drm_gem_prime_handle_to_fd,
+	.prime_fd_to_handle	   = drm_gem_prime_fd_to_handle,
 	.gem_prime_import	   = exynos_drm_gem_prime_import,
 	.gem_prime_import_sg_table = exynos_drm_gem_prime_import_sg_table,
 	.ioctls			   = exynos_ioctls,
@@ -914,7 +1067,14 @@ static struct exynos_drm_driver_info exynos_drm_drivers[] = {
 	}, {
 		DRV_PTR(dsim_driver, CONFIG_DRM_SAMSUNG_DSI),
 		DRM_COMPONENT_DRIVER
-	}, {
+	},
+#if IS_ENABLED(CONFIG_DRM_SAMSUNG_DP)
+	{
+		DRV_PTR(dp_driver, CONFIG_DRM_SAMSUNG_DP),
+		DRM_COMPONENT_DRIVER
+	},
+#endif
+	{
 		DRV_PTR(tui_driver, CONFIG_DRM_SAMSUNG_TUI),
 		DRM_VIRTUAL_DEVICE
 	}, {
@@ -973,6 +1133,9 @@ static int exynos_drm_bind(struct device *dev)
 
 	init_waitqueue_head(&private->wait);
 	spin_lock_init(&private->lock);
+
+	private->tui_enabled = false;
+	mutex_init(&private->dp_tui_lock);
 
 	dev_set_drvdata(dev, drm);
 
@@ -1106,9 +1269,10 @@ static int exynos_drm_platform_probe(struct platform_device *pdev)
 					       match);
 }
 
-static void exynos_drm_platform_remove(struct platform_device *pdev)
+static int exynos_drm_platform_remove(struct platform_device *pdev)
 {
 	component_master_del(&pdev->dev, &exynos_drm_ops);
+	return 0;
 }
 
 static void exynos_drm_platform_shutdown(struct platform_device *pdev)

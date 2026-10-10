@@ -40,6 +40,10 @@
 #include "exynos_drm_hibernation.h"
 #include "exynos_drm_recovery.h"
 
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+#include "gs_drm/gs_drm_connector.h"
+#endif
+
 extern const struct dpp_restriction dpp_drv_data;
 
 static const struct drm_framebuffer_funcs exynos_drm_fb_funcs = {
@@ -103,6 +107,14 @@ static size_t get_plane_size(const struct drm_mode_fb_cmd2 *mode_cmd, u32 idx,
 		else if (idx == 1)
 			size = UV_SIZE_SBWC(mode_cmd->width, mode_cmd->height,
 					is_10bpc);
+	} else if (has_all_bits(DRM_FORMAT_MOD_ARM_AFBC(0),
+				mode_cmd->modifier[idx]) &&
+				IS_YUV(dpu_find_fmt_info(mode_cmd->pixel_format))) {
+		is_10bpc = IS_10BPC(dpu_find_fmt_info(mode_cmd->pixel_format));
+		if (is_10bpc)
+			size = AFBC_10B_Y_SIZE(mode_cmd->width, mode_cmd->height);
+		else
+			size = AFBC_8B_Y_SIZE(mode_cmd->width, mode_cmd->height);
 	} else {
 		height = (idx == 0) ? mode_cmd->height :
 			DIV_ROUND_UP(mode_cmd->height, info->vsub);
@@ -229,8 +241,8 @@ void *exynos_drm_fb_to_vaddr(const struct drm_framebuffer *fb)
 }
 
 static void plane_state_to_win_config(struct dpu_bts_win_config *win_config,
-				      const struct drm_plane_state *plane_state,
-				      const u32 dpp_id)
+					const struct drm_plane_state *plane_state,
+					const struct dpp_device *dpp)
 {
 	const struct drm_framebuffer *fb = plane_state->fb;
 	unsigned int simplified_rot;
@@ -258,7 +270,7 @@ static void plane_state_to_win_config(struct dpu_bts_win_config *win_config,
 		win_config->state = DPU_WIN_STATE_BUFFER;
 
 	win_config->format = fb->format->format;
-	win_config->dpp_id = dpp_id;
+	win_config->dpp_id = dpp->id;
 	win_config->zpos = plane_state->normalized_zpos;
 
 	win_config->comp_src = 0;
@@ -275,23 +287,25 @@ static void plane_state_to_win_config(struct dpu_bts_win_config *win_config,
 
 	win_config->is_secure = (fb->modifier & DRM_FORMAT_MOD_PROTECTION) != 0;
 
+	win_config->hdr_en = dpp_need_enable_hdr(dpp);
+
 	DRM_DEBUG("src[%d %d %d %d], dst[%d %d %d %d]\n",
 			win_config->src_x, win_config->src_y,
 			win_config->src_w, win_config->src_h,
 			win_config->dst_x, win_config->dst_y,
 			win_config->dst_w, win_config->dst_h);
-	DRM_DEBUG("rot[%d] afbc[%d] format[%d] ch[%u] zpos[%u] comp_src[%llu]\n",
+	DRM_DEBUG("rot[%d] afbc[%d] format[%d] ch[%u] zpos[%u] comp_src[%llu] hdr[%d]\n",
 			win_config->is_rot, win_config->is_comp,
 			win_config->format, win_config->dpp_id,
 			plane_state->normalized_zpos,
-			win_config->comp_src);
+			win_config->comp_src, win_config->hdr_en);
 	DRM_DEBUG("alpha[%d] blend mode[%d]\n",
 			plane_state->alpha, plane_state->pixel_blend_mode);
 	DRM_DEBUG("simplified rot[0x%x]\n", simplified_rot);
 }
 
-static void conn_state_to_win_config(struct dpu_bts_win_config *win_config,
-				const struct drm_connector_state *conn_state)
+static void wb_conn_state_to_win_config(struct dpu_bts_win_config *win_config,
+					const struct drm_connector_state *conn_state)
 {
 	const struct writeback_device *wb = conn_to_wb_dev(conn_state->connector);
 	const struct drm_framebuffer *fb = conn_state->writeback_job->fb;
@@ -349,7 +363,7 @@ static void exynos_atomic_bts_pre_update(struct drm_device *dev,
 			if (new_plane_state->crtc) {
 				decon = crtc_to_decon(new_plane_state->crtc);
 				win_config = &decon->bts.rcd_win_config.win;
-				plane_state_to_win_config(win_config, new_plane_state, dpp->id);
+				plane_state_to_win_config(win_config, new_plane_state, dpp);
 
 				decon->bts.rcd_win_config.dma_addr =
 					exynos_drm_fb_dma_addr(new_plane_state->fb, 0);
@@ -362,7 +376,7 @@ static void exynos_atomic_bts_pre_update(struct drm_device *dev,
 			decon = crtc_to_decon(new_plane_state->crtc);
 			win_config = &decon->bts.win_config[zpos];
 
-			plane_state_to_win_config(win_config, new_plane_state, dpp->id);
+			plane_state_to_win_config(win_config, new_plane_state, dpp);
 
 			decon->dpp[i]->dbg_dma_addr =
 				exynos_drm_fb_dma_addr(new_plane_state->fb, 0);
@@ -380,17 +394,42 @@ static void exynos_atomic_bts_pre_update(struct drm_device *dev,
 					new_conn_state, i) {
 		bool old_job, new_job;
 
+		if (new_conn_state && new_conn_state->crtc) {
+			if (is_exynos_drm_connector(conn)) {
+				struct exynos_drm_connector_state *exynos_connector_state =
+					to_exynos_connector_state(new_conn_state);
+				if (exynos_connector_state->update_operation_rate_to_bts) {
+					exynos_connector_state->update_operation_rate_to_bts = false;
+					decon = crtc_to_decon(new_conn_state->crtc);
+					decon_mode_bts_op_rate_update(decon,
+							exynos_connector_state->operation_rate);
+				}
+			}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+			else if (is_gs_drm_connector(conn)) {
+				struct gs_drm_connector_state *gs_connector_state =
+					to_gs_connector_state(new_conn_state);
+				if (gs_connector_state->update_operation_rate_to_bts) {
+					gs_connector_state->update_operation_rate_to_bts = false;
+					decon = crtc_to_decon(new_conn_state->crtc);
+					decon_mode_bts_op_rate_update(decon,
+							gs_connector_state->operation_rate);
+				}
+			}
+#endif
+		}
+
 		if (conn->connector_type != DRM_MODE_CONNECTOR_WRITEBACK)
 			continue;
 
 		old_job = wb_check_job(old_conn_state);
 		new_job = wb_check_job(new_conn_state);
 
-		if (!old_job && new_job) {
+		if (!old_job && new_job && new_conn_state->crtc) {
 			decon = crtc_to_decon(new_conn_state->crtc);
 			win_config = &decon->bts.wb_config;
-			conn_state_to_win_config(win_config, new_conn_state);
-		} else if (old_job && !new_job) {
+			wb_conn_state_to_win_config(win_config, new_conn_state);
+		} else if (old_job && !new_job && old_conn_state->crtc) {
 			decon = crtc_to_decon(old_conn_state->crtc);
 			win_config = &decon->bts.wb_config;
 			win_config->state = DPU_WIN_STATE_DISABLED;
@@ -524,12 +563,12 @@ void exynos_rmem_register(struct decon_device *decon)
 	}
 
 	rmem = of_reserved_mem_lookup(rmem_np);
-	of_node_put(rmem_np);
 	if (!rmem) {
 		pr_err("failed to reserve memory lookup\n");
 		return;
 	}
 
+	of_node_put(rmem_np);
 	rmem->ops = &rmem_ops;
 	decon->fb_handover.rmem = rmem;
 	of_reserved_mem_device_init_by_idx(dev, np, 0);
@@ -627,27 +666,33 @@ exynos_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_stat
 		DPU_EVENT_LOG(DPU_EVT_REQ_CRTC_INFO_NEW, decon->id,
 				new_crtc_state);
 
+		/* Shut down everything that needs a full modeset. */
+		if (!drm_atomic_crtc_needs_modeset(new_crtc_state))
+			continue;
+
+		if (!exynos_crtc_needs_disable(old_crtc_state, new_crtc_state))
+			continue;
+
 		if (drm_atomic_crtc_effectively_active(old_crtc_state) && !new_crtc_state->active) {
 			/* keep runtime vote while disabling is taking place */
 			pm_runtime_get_sync(decon->dev);
 			*disabling_crtc_mask |= drm_crtc_mask(crtc);
 		}
 
-		if (old_crtc_state->active && drm_atomic_crtc_needs_modeset(new_crtc_state)) {
-			DPU_ATRACE_BEGIN("crtc_disable");
+		DPU_ATRACE_BEGIN("crtc_disable");
 
-			funcs = crtc->helper_private;
-			if (new_crtc_state->enable && funcs->prepare)
-				funcs->prepare(crtc);
-			else if (funcs->atomic_disable)
-				funcs->atomic_disable(crtc, old_state);
-			else if (funcs->disable)
-				funcs->disable(crtc);
-			else if (funcs->dpms)
-				funcs->dpms(crtc, DRM_MODE_DPMS_OFF);
+		drm_dbg_atomic(dev, "disabling [CRTC:%d:%s]\n", crtc->base.id, crtc->name);
+		funcs = crtc->helper_private;
+		if (new_crtc_state->enable && funcs->prepare)
+			funcs->prepare(crtc);
+		else if (funcs->atomic_disable)
+			funcs->atomic_disable(crtc, old_state);
+		else if (funcs->disable)
+			funcs->disable(crtc);
+		else if (funcs->dpms)
+			funcs->dpms(crtc, DRM_MODE_DPMS_OFF);
 
-			DPU_ATRACE_END("crtc_disable");
-		}
+		DPU_ATRACE_END("crtc_disable");
 	}
 
 	for_each_oldnew_connector_in_state(old_state, connector, old_conn_state,
@@ -779,6 +824,33 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 					to_exynos_connector_state(old_conn_state),
 					to_exynos_connector_state(new_conn_state));
 		}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+		else if (is_gs_drm_connector(connector)) {
+			struct gs_drm_connector *gs_connector = to_gs_connector(connector);
+			const struct gs_drm_connector_helper_funcs *funcs =
+				gs_connector->helper_private;
+			struct gs_drm_connector_state *new_gs_conn_state, *old_gs_conn_state;
+
+			if (!funcs->atomic_pre_commit)
+				continue;
+
+			new_gs_conn_state = to_gs_connector_state(new_conn_state);
+			old_gs_conn_state = to_gs_connector_state(old_conn_state);
+
+			if (new_conn_state->crtc) {
+				struct exynos_drm_crtc_state *new_exynos_crtc_state;
+
+				new_crtc_state = drm_atomic_get_new_crtc_state(old_state,
+						new_conn_state->crtc);
+				new_exynos_crtc_state = to_exynos_crtc_state(new_crtc_state);
+				new_gs_conn_state->crtc_last_present_ts =
+					new_exynos_crtc_state->expected_present_time;
+			}
+			funcs->atomic_pre_commit(gs_connector,
+						 old_gs_conn_state,
+						 new_gs_conn_state);
+		}
+#endif
 	}
 	DPU_ATRACE_END("connector_pre_commit");
 
@@ -816,6 +888,16 @@ static void exynos_atomic_commit_tail(struct drm_atomic_state *old_state)
 					to_exynos_connector_state(old_conn_state),
 					to_exynos_connector_state(new_conn_state));
 		}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+		else if (is_gs_drm_connector(connector)) {
+			struct gs_drm_connector *gs_connector = to_gs_connector(connector);
+			const struct gs_drm_connector_helper_funcs *funcs =
+				gs_connector->helper_private;
+
+			funcs->atomic_commit(gs_connector, to_gs_connector_state(old_conn_state),
+					     to_gs_connector_state(new_conn_state));
+		}
+#endif
 	}
 	DPU_ATRACE_END("connector_commit");
 	DPU_ATRACE_BEGIN("wait_for_crtc_flip");
@@ -876,4 +958,6 @@ void exynos_drm_mode_config_init(struct drm_device *dev)
 
 	dev->mode_config.funcs = &exynos_drm_mode_config_funcs;
 	dev->mode_config.helper_private = &exynos_drm_mode_config_helpers;
+
+	dev->mode_config.fb_modifiers_not_supported = false;
 }

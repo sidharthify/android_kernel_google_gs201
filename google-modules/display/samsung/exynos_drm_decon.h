@@ -89,6 +89,7 @@ struct dpu_bts_win_config {
 	bool is_rot;
 	bool is_comp;
 	bool is_secure;
+	bool hdr_en;
 	u32 dpp_id;
 	u32 zpos;
 	u32 format;
@@ -130,6 +131,7 @@ struct decon_win_config {
 
 struct dpu_bts {
 	bool enabled;
+	bool pending_fps_update;
 	u32 resol_clk;
 	u32 peak;
 	u32 prev_peak;
@@ -139,9 +141,13 @@ struct dpu_bts {
 	u32 write_bw;
 	u32 total_bw;
 	u32 prev_total_bw;
+	u32 urgent_rd_lat;
+	u32 prev_urgent_rd_lat;
 	u32 max_disp_freq;
 	u32 prev_max_disp_freq;
 	u32 dvfs_max_disp_freq;
+	u32 max_dpp_read_rt_bw;
+	u32 video_num;
 	u32 ppc;
 	u32 ppc_rotator;
 	u32 ppc_scaler;
@@ -154,6 +160,7 @@ struct dpu_bts {
 	u32 afbc_yuv_util_pct;
 	u32 afbc_rgb_rt_util_pct;
 	u32 afbc_yuv_rt_util_pct;
+	u32 afbc_clk_ppc_margin;
 	u32 dfs_lv_cnt;
 	u32 dfs_lv_khz[BTS_DFS_MAX];
 	u32 max_dfs_lv_for_wb;
@@ -161,12 +168,14 @@ struct dpu_bts {
 	u32 vfp;
 	u32 vsa;
 	u32 fps;
+	u32 op_rate;
 	u32 pending_vblank_usec;
 	u32 vblank_usec;
 	/* includes writeback dpp */
 	struct dpu_bts_bw rt_bw[MAX_DPP_CNT];
 
 	u32 ch_bw[MAX_AXI_PORT];
+	int urgent_rd_lat_index[MAX_AXI_PORT];
 	int bw_idx;
 	struct dpu_bts_ops *ops;
 #if IS_ENABLED(CONFIG_EXYNOS_PM_QOS) || IS_ENABLED(CONFIG_EXYNOS_PM_QOS_MODULE)
@@ -179,6 +188,32 @@ struct dpu_bts {
 	struct dpu_bts_win_config wb_config;
 	struct decon_win_config rcd_win_config;
 	atomic_t delayed_update;
+};
+
+struct dpu_bts_scenario {
+	bool enabled;
+	bool voted;
+	bool skip_with_video;
+	u32 min_panel_width;
+	u32 min_panel_height;
+	u32 min_fps;
+	u32 min_rt_bw;
+	u32 max_rt_bw;
+	u32 min_peak_bw;
+	u32 max_peak_bw;
+	u32 idx;
+	const char *name;
+};
+
+struct bw_latency_map {
+	u32 bw_kbps;
+	u32 latency_ns;
+};
+
+struct dpu_bts_urgent_lat {
+	bool enabled;
+	struct bw_latency_map *bw_lat_tbl;
+	u32 bw_lat_map_cnt;
 };
 
 /**
@@ -263,6 +298,8 @@ enum dpu_event_type {
 	DPU_EVT_PARTIAL_UPDATE,
 	DPU_EVT_PARTIAL_RESTORE,
 
+	DPU_EVT_HIST_COLLECT_BINS,
+
 	DPU_EVT_DSIM_CRC,
 	DPU_EVT_DSIM_ECC,
 
@@ -309,6 +346,7 @@ struct dpu_log_win {
 	u32 win_idx;
 	u32 plane_idx;
 	bool secure;
+	bool hdr_en;
 };
 
 struct dpu_log_rsc_occupancy {
@@ -353,6 +391,9 @@ struct dpu_log_bts_update {
 	u32 prev_rt_avg_bw;
 	u32 total_bw;
 	u32 prev_total_bw;
+	u32 urgent_rd_lat;
+	u32 prev_urgent_rd_lat;
+	u32 dpu_scen_idx;
 };
 
 struct dpu_log_bts_cal {
@@ -364,6 +405,7 @@ struct dpu_log_bts_cal {
 	u32 write_bw;
 	u32 fps; /* bts fps */
 	u32 crtc_fps; /* crtc fps */
+	u32 op_rate;
 };
 
 struct dpu_log_bts_event {
@@ -387,6 +429,10 @@ struct dpu_log_plane_info {
 	u32 height;
 	u32 zpos;
 	u32 format;
+};
+
+struct dpu_log_hist_info {
+	enum exynos_histogram_id id;
 };
 
 struct dpu_log_decon_cfg {
@@ -415,6 +461,7 @@ struct dpu_log {
 		struct dpu_log_bts_event bts_event;
 		struct dpu_log_partial partial;
 		struct dpu_log_plane_info plane_info;
+		struct dpu_log_hist_info hist_info;
 		struct dpu_log_decon_cfg decon_cfg;
 		unsigned int value;
 	} data;
@@ -445,7 +492,9 @@ struct decon_debug {
 	u32 auto_refresh_frames;
 
 	u32 te_cnt;
+	u32 framedone_cnt;
 	bool force_te_on;
+	bool tout_en;
 };
 
 struct decon_device {
@@ -465,6 +514,8 @@ struct decon_device {
 	struct decon_config		config;
 	struct decon_resources		res;
 	struct dpu_bts			bts;
+	struct dpu_bts_scenario		bts_scen;
+	struct dpu_bts_urgent_lat	bts_urgent_rd_lat;
 	struct decon_debug		d;
 	struct exynos_hibernation	*hibernation;
 	struct drm_pending_vblank_event *event;
@@ -480,11 +531,13 @@ struct decon_device {
 	u32				irq_fd;	/* frame done irq number*/
 	u32				irq_ext;/* extra irq number*/
 	int				irq_te;
+	int				irq_tout;
 	int				irq_ds;	/* dimming start irq number */
 	int				irq_de;	/* dimming end irq number */
 	int				te_gpio;
+	int				tout_gpio;
 	atomic_t			te_ref;
-	struct completion te_rising; /* signaled when irq_te is triggered */
+	atomic_t			tout_ref;
 
 	spinlock_t			slock;
 
@@ -494,10 +547,13 @@ struct decon_device {
 #endif
 
 	atomic_t frames_pending;
+	atomic_t frame_transfer_pending;
 	wait_queue_head_t framedone_wait;
 
 	bool keep_unmask;
 	struct exynos_partial *partial;
+	bool cgc_need_update;
+	bool dqe_need_update;
 };
 
 static inline struct decon_device *to_decon_device(const struct device *dev)
@@ -519,12 +575,14 @@ static inline struct decon_device *get_decon_drvdata(u32 id)
 
 	return NULL;
 }
-
+bool is_console_enabled(void);
 bool decon_dump_ignore(enum dpu_event_condition condition);
-void decon_dump(const struct decon_device *decon);
+void decon_dump(struct decon_device *decon, struct drm_printer *p);
+void decon_dump_locked(const struct decon_device *decon, struct drm_printer *p);
 void decon_dump_all(struct decon_device *decon,
 		enum dpu_event_condition cond, bool async_buf_dump);
 void decon_enable_te_irq(struct decon_device *decon, bool enable);
+void decon_enable_tout_irq(struct decon_device *decon, bool enable);
 void decon_dump_event_condition(const struct decon_device *decon,
 		enum dpu_event_condition condition);
 int dpu_init_debug(struct decon_device *decon);
@@ -537,10 +595,14 @@ void decon_force_vblank_event(struct decon_device *decon);
 void decon_mode_bts_pre_update(struct decon_device *decon,
 				const struct drm_crtc_state *crtc_state,
 				const struct drm_atomic_state *state);
+void decon_mode_bts_op_rate_update(struct decon_device *decon,
+				const u32 op_rate);
 #else
-void decon_mode_bts_pre_update(struct decon_device *decon,
+static inline void decon_mode_bts_pre_update(struct decon_device *decon,
 				const struct drm_crtc_state *crtc_state,
 				const struct drm_atomic_state *state) { }
+static inline void decon_mode_bts_op_rate_update(struct decon_device *decon,
+				const u32 op_rate) { }
 #endif
 
 #if IS_ENABLED(CONFIG_EXYNOS_ITMON)

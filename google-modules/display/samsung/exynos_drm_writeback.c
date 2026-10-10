@@ -16,7 +16,7 @@
 #include <linux/platform_device.h>
 #include <linux/component.h>
 #include <linux/irq.h>
-#include <linux/videodev2_exynos_media.h>
+#include <uapi/linux/videodev2_exynos_media.h>
 #include <linux/dma-buf.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
@@ -42,8 +42,9 @@
 #include "exynos_drm_writeback.h"
 
 static const struct drm_display_mode exynos_drm_writeback_modes[] = {
-	{ DRM_MODE("2400x1080", DRM_MODE_TYPE_DRIVER, 165984, 2400, 2432, 2444, 2470, 0, 1080, 1092,
-		   1096, 1120, 0, DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC) },
+	{ DRM_MODE("2400x1080", DRM_MODE_TYPE_DRIVER, 165984, 2400, 2432,
+		   2444, 2470, 0, 1080, 1092, 1096, 1120, 0,
+		   DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC) },
 };
 
 void wb_dump(struct drm_printer *p, struct writeback_device *wb)
@@ -54,7 +55,7 @@ void wb_dump(struct drm_printer *p, struct writeback_device *wb)
 	}
 
 	__dpp_dump(p, wb->id, wb->regs.dpp_base_regs, wb->regs.dma_base_regs,
-			wb->attr);
+		   NULL, NULL, NULL, wb->attr);
 }
 
 static const uint32_t writeback_formats[] = {
@@ -71,6 +72,7 @@ static const struct of_device_id wb_of_match[] = {
 	},
 	{ /* sentinel */ },
 };
+MODULE_DEVICE_TABLE(of, wb_of_match);
 
 static int exynos_drm_add_writeback_modes(struct drm_connector *connector)
 {
@@ -96,10 +98,10 @@ static int exynos_drm_add_writeback_modes(struct drm_connector *connector)
 static int writeback_get_modes(struct drm_connector *connector)
 {
 	struct drm_device *dev = connector->dev;
-	int num_modes;
+	int num_modes = 0;
 
 	num_modes = drm_add_modes_noedid(connector, dev->mode_config.max_width,
-					 dev->mode_config.max_height);
+				    dev->mode_config.max_height);
 	num_modes += exynos_drm_add_writeback_modes(connector);
 
 	return num_modes;
@@ -110,6 +112,7 @@ static void wb_convert_connector_state_to_config(struct dpp_params_info *config,
 {
 	struct drm_framebuffer *fb = state->base.writeback_job->fb;
 	const struct drm_crtc_state *crtc_state = state->base.crtc->state;
+	unsigned long long comp_blk_size;
 
 	pr_debug("%s +\n", __func__);
 
@@ -120,9 +123,31 @@ static void wb_convert_connector_state_to_config(struct dpp_params_info *config,
 	config->src.f_w = fb->width;
 	config->src.f_h = fb->height;
 
+
 	if (has_all_bits(DRM_FORMAT_MOD_SAMSUNG_SBWC(0), fb->modifier)) {
 		config->comp_type = COMP_TYPE_SBWC;
-		config->blk_size = SBWC_BLOCK_SIZE_GET(fb->modifier);
+		comp_blk_size = SBWC_BLOCK_SIZE_GET(fb->modifier);
+		switch (comp_blk_size) {
+		case SBWC_FORMAT_MOD_BLOCK_SIZE_32x2:
+			config->blk_size = SBWC_BLK_32x2;
+			break;
+		case SBWC_FORMAT_MOD_BLOCK_SIZE_32x3:
+			config->blk_size = SBWC_BLK_32x3;
+			break;
+		case SBWC_FORMAT_MOD_BLOCK_SIZE_32x4:
+			config->blk_size = SBWC_BLK_32x4;
+			break;
+		case SBWC_FORMAT_MOD_BLOCK_SIZE_32x5:
+			config->blk_size = SBWC_BLK_32x5;
+			break;
+		case SBWC_FORMAT_MOD_BLOCK_SIZE_32x6:
+			config->blk_size = SBWC_BLK_32x6;
+			break;
+		default:
+			pr_err("SBWC Block Size(%llu) is not supported\n", comp_blk_size);
+			config->blk_size = SBWC_BLK_32x2;
+			break;
+		}
 	} else {
 		config->comp_type = COMP_TYPE_NONE;
 	}
@@ -136,25 +161,29 @@ static void wb_convert_connector_state_to_config(struct dpp_params_info *config,
 	config->c_pl_stride = 0;
 
 	config->addr[0] = exynos_drm_fb_dma_addr(fb, 0);
-	config->addr[1] = exynos_drm_fb_dma_addr(fb, 1);
 
 	if (has_all_bits(DRM_FORMAT_MOD_SAMSUNG_SBWC(0), fb->modifier)) {
 		const struct dpu_fmt *fmt_info = dpu_find_fmt_info(config->format);
 		bool is_10bpc = IS_10BPC(fmt_info);
 
-		config->addr[0] += Y_PL_SIZE_SBWC(config->src.f_w, config->src.f_h, is_10bpc);
+		config->addr[0] += Y_PL_SIZE_SBWC(config->src.f_w,
+				config->src.f_h, is_10bpc);
 		config->y_hd_y2_stride = HD_STRIDE_SIZE_SBWC(config->src.f_w);
 
 		config->addr[1] = exynos_drm_fb_dma_addr(fb, 0);
-		config->y_pl_c2_stride = PL_STRIDE_SIZE_SBWC(config->src.f_w, is_10bpc);
+		config->y_pl_c2_stride = PL_STRIDE_SIZE_SBWC(config->src.f_w,
+				is_10bpc);
 
 		config->addr[2] = exynos_drm_fb_dma_addr(fb, 1) +
-				  UV_PL_SIZE_SBWC(config->src.f_w, config->src.f_h, is_10bpc);
+			UV_PL_SIZE_SBWC(config->src.f_w, config->src.f_h,
+					is_10bpc);
 		config->c_hd_stride = HD_STRIDE_SIZE_SBWC(config->src.f_w);
 
 		config->addr[3] = exynos_drm_fb_dma_addr(fb, 1);
-		config->c_pl_stride = PL_STRIDE_SIZE_SBWC(config->src.f_w, is_10bpc);
+		config->c_pl_stride = PL_STRIDE_SIZE_SBWC(config->src.f_w,
+				is_10bpc);
 	} else {
+		config->addr[1] = exynos_drm_fb_dma_addr(fb, 1);
 		config->addr[2] = exynos_drm_fb_dma_addr(fb, 2);
 		config->addr[3] = exynos_drm_fb_dma_addr(fb, 3);
 	}
@@ -629,6 +658,7 @@ static irqreturn_t odma_irq_handler(int irq, void *priv)
 	irqs = odma_reg_get_irq_and_clear(wb->id);
 
 	if (irqs & ODMA_STATUS_FRAMEDONE_IRQ || irqs & ODMA_INST_OFF_DONE_IRQ) {
+
 		if (irqs & ODMA_STATUS_FRAMEDONE_IRQ)
 			pr_debug("wb(%d) framedone irq occurs\n", wb->id);
 		else
@@ -746,7 +776,7 @@ fail:
 	return ret;
 }
 
-static void writeback_remove(struct platform_device *pdev)
+static int writeback_remove(struct platform_device *pdev)
 {
 	struct writeback_device *wb = platform_get_drvdata(pdev);
 
@@ -756,6 +786,7 @@ static void writeback_remove(struct platform_device *pdev)
 		iounmap(wb->regs.dpp_base_regs);
 	iounmap(wb->regs.dma_base_regs);
 
+	return 0;
 }
 
 struct platform_driver writeback_driver = {

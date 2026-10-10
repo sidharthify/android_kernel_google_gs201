@@ -70,8 +70,34 @@ static int emul_enable(struct drm_panel *panel)
 }
 
 static const struct exynos_panel_mode emul_modes[] = {
+#ifdef CONFIG_BOARD_EMULATOR
 	{
-		/* 1440x2960 @ 60 */
+		.mode = {
+			.name = "720x1280x60",
+			.clock = 71604,
+			.hdisplay = 720,
+			.hsync_start = 720 + 4,
+			.hsync_end = 720 + 4 + 5,
+			.htotal = 720 + 4 + 5 + 36,
+			.vdisplay = 1280,
+			.vsync_start = 1280 + 88,
+			.vsync_end = 1280 + 88 + 44,
+			.vtotal = 1280 + 88 + 44 + 148,
+			.flags = 0,
+			.width_mm = 80,
+			.height_mm = 120,
+		},
+		.exynos_mode = {
+			.mode_flags = MIPI_DSI_MODE_VIDEO,
+			.bpc = 8,
+			.dsc = {
+				.enabled = false,
+			},
+			.sw_trigger = 1,
+		},
+	},
+#endif
+	{
 		.mode = {
 			.name = "1440x2960x60",
 			.clock = 269280,
@@ -99,7 +125,6 @@ static const struct exynos_panel_mode emul_modes[] = {
 		},
 	},
 	{
-		/* 1440x2960 @ 120 */
 		.mode = {
 			.name = "1440x2960x120",
 			.clock = 538560,

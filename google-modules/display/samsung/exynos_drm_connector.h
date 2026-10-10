@@ -31,9 +31,17 @@ enum exynos_mipi_sync_mode {
 	MIPI_CMD_SYNC_LHBM = BIT(2),
 	MIPI_CMD_SYNC_GHBM = BIT(3),
 	MIPI_CMD_SYNC_BL = BIT(4),
+	MIPI_CMD_SYNC_OP_RATE = BIT(5),
 };
 
 struct exynos_drm_connector;
+
+/* customized DRM mode type and flags */
+#define DRM_MODE_FLAG_NS DRM_MODE_FLAG_CLKDIV2
+
+// BTS need takes operation rate into account
+#define DRM_MODE_FLAG_BTS_OP_RATE DRM_MODE_FLAG_NVSYNC
+#define IS_BTS2OPRATE_MODE(t) ((t) & DRM_MODE_FLAG_BTS_OP_RATE)
 
 /** Private DSI msg flags **/
 
@@ -66,7 +74,9 @@ struct exynos_drm_connector_properties {
 	struct drm_property *panel_idle_support;
 	struct drm_property *mipi_sync;
 	struct drm_property *panel_orientation;
-	struct drm_property *vrr_switch_duration;
+	struct drm_property *rr_switch_duration;
+	struct drm_property *operation_rate;
+	struct drm_property *refresh_on_lp;
 };
 
 struct exynos_display_dsc {
@@ -77,7 +87,6 @@ struct exynos_display_dsc {
 
 	const struct drm_dsc_config *cfg;
 
-	unsigned int delay_reg_init_us;
 	bool is_scrv4;
 };
 
@@ -103,6 +112,9 @@ struct exynos_display_mode {
 
 	/* @mode_flags: DSI mode flags from drm_mipi_dsi.h */
 	unsigned long mode_flags;
+
+	/** @min_bts_fps: minimal bts fps requirement */
+	unsigned int min_bts_fps;
 
 	/* @vblank_usec: parameter to calculate bts */
 	unsigned int vblank_usec;
@@ -170,6 +182,12 @@ struct exynos_drm_connector_state {
 	int te_gpio;
 
 	/*
+	 * @tout_gpio: Provides the gpio for panel TOUT (TE2) signal.
+	 *	       This is used for checking panel refresh rate.
+	 */
+	int tout_gpio;
+
+	/*
 	 * @partial: Specify whether this panel supports partial update feature.
 	 */
 	struct exynos_display_partial partial;
@@ -191,6 +209,15 @@ struct exynos_drm_connector_state {
 	 *                nothing is being displayed on screen.
 	 */
 	bool blanked_mode;
+
+	/* @is_recovering: whether we're doing decon recovery */
+	bool is_recovering;
+
+	/* @operation_rate: panel operation rate */
+	unsigned int operation_rate;
+
+	/* @update_operation_rate_to_bts: update panel operation rate to BTS requirement */
+	bool update_operation_rate_to_bts;
 };
 
 #define to_exynos_connector_state(connector_state) \
@@ -247,23 +274,43 @@ int exynos_drm_connector_create_properties(struct drm_device *dev);
 struct exynos_drm_connector_properties *
 exynos_drm_connector_get_properties(struct exynos_drm_connector *exynos_conector);
 
-static inline struct exynos_drm_connector_state *
-crtc_get_exynos_connector_state(const struct drm_atomic_state *state,
-				const struct drm_crtc_state *crtc_state)
+/**
+ * crtc_get_phys_connector_state() - Finds connector state associated with crtc
+ * @state: drm_atomic_state to check for connector states
+ * @crtc_state: crtc_state to check connectors against
+ *
+ * A given crtc_state may be connected to a mixture of physical connectors and
+ * writeback connectors. This function finds the connector_state attached to a
+ * given crtc that is physical (that is, non-writeback).
+ *
+ * Return: drm_connector_state for physical connector attached, or NULL if no
+ *         such connector is present
+ */
+static inline struct drm_connector_state *
+crtc_get_phys_connector_state(const struct drm_atomic_state *state,
+			      const struct drm_crtc_state *crtc_state)
 {
 	const struct drm_connector *conn;
 	struct drm_connector_state *conn_state;
 	int i;
 
 	for_each_new_connector_in_state(state, conn, conn_state, i) {
+		if (conn->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
+			continue;
+
 		if (!(crtc_state->connector_mask & drm_connector_mask(conn)))
 			continue;
 
-		if (is_exynos_drm_connector(conn))
-			return to_exynos_connector_state(conn_state);
+		return conn_state;
 	}
-
 	return NULL;
 }
 
+int exynos_drm_connector_set_lhbm_hist(struct exynos_drm_connector *conn, int w, int h, int d,
+				       int r);
+int exynos_drm_connector_get_lhbm_gray_level(struct exynos_drm_connector *conn);
+
+int exynos_drm_mode_te_freq(const struct drm_display_mode *mode);
+int exynos_drm_mode_bts_fps(const struct drm_display_mode *mode, unsigned int min_bts_fps);
+int exynos_bts_fps_to_drm_mode_clock(const struct drm_display_mode *mode, int bts_fps);
 #endif /* _EXYNOS_DRM_CONNECTOR_H_ */

@@ -18,7 +18,6 @@
 #include <linux/sched/clock.h>
 #include <linux/sysfs.h>
 #include <linux/time.h>
-#include <linux/vmalloc.h>
 #include <video/mipi_display.h>
 #include <drm/drm_print.h>
 #include <drm/drm_managed.h>
@@ -27,6 +26,7 @@
 #include <trace/dpu_trace.h>
 
 #include <cal_config.h>
+#include <soc/google/exynos_tty.h>
 
 #if IS_ENABLED(CONFIG_ARM_EXYNOS_DEVFREQ)
 #include <soc/google/exynos-devfreq.h>
@@ -34,6 +34,8 @@
 #include <dt-bindings/soc/google/gs101-devfreq.h>
 #elif defined(CONFIG_SOC_GS201)
 #include <dt-bindings/soc/google/gs201-devfreq.h>
+#elif defined(CONFIG_SOC_ZUMA)
+#include <dt-bindings/soc/google/zuma-devfreq.h>
 #endif
 #endif
 
@@ -146,6 +148,10 @@ void DPU_EVENT_LOG(enum dpu_event_type type, int index, void *priv)
 	}
 
 	decon = get_decon_drvdata(index);
+	if (unlikely(!decon)) {
+		pr_err("%s: Invalid decon (%d)\n", __func__, index);
+		return;
+	}
 	if (IS_ERR_OR_NULL(decon->d.event_log))
 		return;
 
@@ -276,6 +282,7 @@ void DPU_EVENT_LOG(enum dpu_event_type type, int index, void *priv)
 		log->data.win.win_idx = dpp->win_id;
 		log->data.win.plane_idx = dpp->id;
 		log->data.win.secure = dpp->protection;
+		log->data.win.hdr_en = dpp_need_enable_hdr(dpp);
 		break;
 	case DPU_EVT_REQ_CRTC_INFO_OLD:
 	case DPU_EVT_REQ_CRTC_INFO_NEW:
@@ -297,6 +304,12 @@ void DPU_EVENT_LOG(enum dpu_event_type type, int index, void *priv)
 		log->data.bts_update.prev_rt_avg_bw = decon->bts.prev_rt_avg_bw;
 		log->data.bts_update.total_bw = decon->bts.total_bw;
 		log->data.bts_update.prev_total_bw = decon->bts.prev_total_bw;
+		log->data.bts_update.urgent_rd_lat = decon->bts.urgent_rd_lat;
+		log->data.bts_update.prev_urgent_rd_lat = decon->bts.prev_urgent_rd_lat;
+		if (decon->bts_scen.enabled && decon->bts_scen.voted)
+			log->data.bts_update.dpu_scen_idx = decon->bts_scen.idx;
+		else
+			log->data.bts_update.dpu_scen_idx = 0;
 		break;
 	case DPU_EVT_BTS_CALC_BW:
 		dpu_event_save_freqs(&log->data.bts_cal.freqs);
@@ -308,6 +321,7 @@ void DPU_EVENT_LOG(enum dpu_event_type type, int index, void *priv)
 		log->data.bts_cal.fps = decon->bts.fps;
 		crtc_state = (struct drm_crtc_state *)priv;
 		log->data.bts_cal.crtc_fps = drm_mode_vrefresh(&crtc_state->mode);
+		log->data.bts_cal.op_rate = decon->bts.op_rate;
 		break;
 	case DPU_EVT_DSIM_UNDERRUN:
 		dpu_event_save_freqs(&log->data.bts_event.freqs);
@@ -326,6 +340,9 @@ void DPU_EVENT_LOG(enum dpu_event_type type, int index, void *priv)
 		partial_region = priv;
 		memcpy(&log->data.partial.prev, partial_region,
 					sizeof(struct drm_rect));
+		break;
+	case DPU_EVT_HIST_COLLECT_BINS:
+		log->data.hist_info.id = *(enum exynos_histogram_id *) priv;
 		break;
 	case DPU_EVT_DSIM_CRC:
 		log->data.value = decon->d.crc_cnt;
@@ -362,6 +379,10 @@ void DPU_EVENT_LOG_ATOMIC_COMMIT(int index)
 	}
 
 	decon = get_decon_drvdata(index);
+	if (unlikely(!decon)) {
+		pr_err("%s: Invalid decon (%d)\n", __func__, index);
+		return;
+	}
 	log = dpu_event_get_next(decon);
 	if (!log)
 		return;
@@ -405,8 +426,13 @@ DPU_EVENT_LOG_CMD(struct dsim_device *dsim, u8 type, u8 d0, u16 len)
 {
 	int i;
 	struct decon_device *decon = (struct decon_device *)dsim_get_decon(dsim);
-	struct dpu_log *log = dpu_event_get_next(decon);
+	struct dpu_log *log;
 
+	if (unlikely(!decon)) {
+		pr_err("%s: Invalid decon\n", __func__);
+		return;
+	}
+	log = dpu_event_get_next(decon);
 	if (!log)
 		return;
 
@@ -430,13 +456,14 @@ static void dpu_print_log_win_config(const struct decon_win_config *const win_co
 
 	char buf[128];
 	int len = scnprintf(buf, sizeof(buf),
-			"\t\t\t\t\t%s: %s[0x%llx] CH%d SRC[%d %d %d %d] %s%s%s",
+			"\t\t\t\t\t%s: %s[0x%llx] CH%d SRC[%d %d %d %d] %s%s%s%s",
 			is_rcd ? "RCD" : "WIN", str_state[win->state],
 			(win->state == DPU_WIN_STATE_BUFFER) ? win_config->dma_addr : 0,
 			(win->state == DPU_WIN_STATE_COLOR) ? -1 : win->dpp_id,
 			win->src_x, win->src_y, win->src_w, win->src_h,
 			(win->is_comp) ? "AFBC " : "", (win->is_rot) ? "ROT " : "",
-			(win->is_secure) ? "SECURE " : "");
+			(win->is_secure) ? "SECURE " : "",
+			(win->hdr_en) ? "HDR " : "");
 	len += scnprintf(buf + len, sizeof(buf) - len, "DST[%d %d %d %d] ", win->dst_x, win->dst_y,
 			 win->dst_w, win->dst_h);
 	len += scnprintf(buf + len, sizeof(buf) - len, "ZPOS%d", win->zpos);
@@ -492,14 +519,15 @@ static void dpu_print_log_rsc(char *buf, int len, u32 decon_id, struct dpu_log_r
 	sprintf(buf + len, "\t%s\t%s", str_chs, str_wins);
 }
 
-#define LOG_BUF_SIZE	160
+#define LOG_BUF_SIZE	176
 static int dpu_print_log_bts_update(char *buf, int len, struct dpu_log_bts_update *update)
 {
 	return scnprintf(buf + len, LOG_BUF_SIZE - len,
-			"\tmif(%lu) int(%lu) disp(%lu) peak(%u,%u) rt(%u,%u) total(%u,%u)",
-			update->freqs.mif_freq, update->freqs.int_freq, update->freqs.disp_freq,
-			update->prev_peak, update->peak, update->prev_rt_avg_bw, update->rt_avg_bw,
-			update->prev_total_bw, update->total_bw);
+		"\tmif(%lu) int(%lu) disp(%lu) peak(%u,%u) rt(%u,%u) total(%u,%u) rd(%u,%u) scen(%u)",
+		update->freqs.mif_freq, update->freqs.int_freq, update->freqs.disp_freq,
+		update->prev_peak, update->peak, update->prev_rt_avg_bw, update->rt_avg_bw,
+		update->prev_total_bw, update->total_bw,
+		update->prev_urgent_rd_lat, update->urgent_rd_lat, update->dpu_scen_idx);
 }
 
 static int dpu_print_log_partial(char *buf, int len, struct dpu_log_partial *p)
@@ -580,6 +608,7 @@ static const char *get_event_name(enum dpu_event_type type)
 		"PARTIAL_PREPARE",
 		"PARTIAL_UPDATE",
 		"PARTIAL_PESTORE",
+		"HIST_COLLECT_BINS",
 		"DSIM_CRC",
 		"DSIM_ECC",
 		"VBLANK_ENABLE",
@@ -773,7 +802,7 @@ static void dpu_event_log_print(const struct decon_device *decon, struct drm_pri
 			break;
 
 		rem_nsec = do_div(ts, 1000000000);
-		len = scnprintf(buf, sizeof(buf), "[%6llu.%06lu] %20s",
+		len = scnprintf(buf, sizeof(buf), "<%6llu.%06lu> %20s",
 				ts, rem_nsec / 1000, get_event_name(log->type));
 
 		switch (log->type) {
@@ -857,10 +886,11 @@ static void dpu_event_log_print(const struct decon_device *decon, struct drm_pri
 		case DPU_EVT_PLANE_UPDATE:
 		case DPU_EVT_PLANE_DISABLE:
 			scnprintf(buf + len, sizeof(buf) - len,
-					"\tCH:%d, WIN:%d, %s",
+					"\tCH:%d, WIN:%d, %s%s",
 					log->data.win.plane_idx,
 					log->data.win.win_idx,
-					log->data.win.secure ? "SECURE" : "");
+					log->data.win.secure ? "SECURE " : "",
+					log->data.win.hdr_en ? "HDR" : "");
 			break;
 		case DPU_EVT_REQ_CRTC_INFO_OLD:
 		case DPU_EVT_REQ_CRTC_INFO_NEW:
@@ -880,11 +910,11 @@ static void dpu_event_log_print(const struct decon_device *decon, struct drm_pri
 			break;
 		case DPU_EVT_BTS_CALC_BW:
 			scnprintf(buf + len, sizeof(buf) - len,
-					"\tdisp(%u) peak(%u) rt(%u) read(%u) write(%u) %uhz (crtc: %uhz)",
+					"\tdisp(%u) peak(%u) rt(%u) read(%u) write(%u) %uhz (crtc: %uhz, op: %uhz)",
 					log->data.bts_cal.disp_freq, log->data.bts_cal.peak,
 					log->data.bts_cal.rt_avg_bw, log->data.bts_cal.read_bw,
 					log->data.bts_cal.write_bw, log->data.bts_cal.fps,
-					log->data.bts_cal.crtc_fps);
+					log->data.bts_cal.crtc_fps, log->data.bts_cal.op_rate);
 			break;
 		case DPU_EVT_DSIM_UNDERRUN:
 			scnprintf(buf + len, sizeof(buf) - len,
@@ -909,6 +939,11 @@ static void dpu_event_log_print(const struct decon_device *decon, struct drm_pri
 				log->data.partial.prev.y1,
 				drm_rect_width(&log->data.partial.prev),
 				drm_rect_height(&log->data.partial.prev));
+			break;
+		case DPU_EVT_HIST_COLLECT_BINS:
+			scnprintf(buf + len, sizeof(buf) - len,
+					"\thist_id: %d",
+					log->data.hist_info.id);
 			break;
 		case DPU_EVT_DSIM_CRC:
 			scnprintf(buf + len, sizeof(buf) - len,
@@ -959,6 +994,45 @@ static int dpu_debug_event_open(struct inode *inode, struct file *file)
 
 static const struct file_operations dpu_event_fops = {
 	.open = dpu_debug_event_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release,
+};
+
+static int dpu_debug_reg_dump_show(struct seq_file *s, void *unused)
+{
+	struct decon_device *decon = s->private;
+	struct dsim_device *dsim;
+	struct drm_printer p = drm_seq_file_printer(s);
+
+	if (decon->state == DECON_STATE_ON &&
+		pm_runtime_get_if_in_use(decon->dev) == 1) {
+		decon_dump(decon, &p);
+		dsim = decon_get_dsim(decon);
+		if (dsim) {
+			dsim_dump(dsim, &p);
+			if (dsim->dual_dsi == DSIM_DUAL_DSI_MAIN) {
+				dsim = exynos_get_dual_dsi(DSIM_DUAL_DSI_SEC);
+				if (dsim)
+					dsim_dump(dsim, &p);
+			}
+		}
+		pm_runtime_put(decon->dev);
+	} else {
+		drm_printf(&p, "%s[%u]: DECON disabled(%d)\n",
+			decon->dev->driver->name, decon->id, decon->state);
+	}
+
+	return 0;
+}
+
+static int dpu_debug_reg_dump_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, dpu_debug_reg_dump_show, inode->i_private);
+}
+
+static const struct file_operations dpu_reg_dump_fops = {
+	.open = dpu_debug_reg_dump_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = seq_release,
@@ -1468,43 +1542,49 @@ static ssize_t counters_show(struct device *dev, struct device_attribute *attr, 
 
 static DEVICE_ATTR_RO(counters);
 
-static const struct attribute *decon_debug_attrs[] = {
-	&dev_attr_counters.attr,
-	NULL
-};
-
-static int hibernation_show(struct seq_file *s, void *unused)
+static ssize_t hibernation_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
 {
-	struct decon_device *decon = s->private;
+	struct decon_device *decon = dev_get_drvdata(dev);
 	struct exynos_hibernation *hiber = decon->hibernation;
 
-	seq_printf(s, "%s, block_cnt(%d)\n",
-			hiber->enabled ? "enabled" : "disabled",
-			atomic_read(&hiber->block_cnt));
+	if (!decon || !hiber) {
+		pr_err("%s: invalid device\n", __func__);
+		return -ENODEV;
+	}
 
-	return 0;
+	return scnprintf(buf, PAGE_SIZE,
+				"state: %s\n"
+				"block_count: %d\n",
+				hiber->enabled ? "enabled" : "disabled",
+				atomic_read(&hiber->block_cnt));
 }
 
-static int hibernation_open(struct inode *inode, struct file *file)
+static ssize_t hibernation_store(struct device *dev,
+			struct device_attribute *attr, const char *buf, size_t len)
 {
-	return single_open(file, hibernation_show, inode->i_private);
-}
+	struct decon_device *decon;
+	struct exynos_hibernation *hiber;
+	bool enable;
 
-static ssize_t hibernation_write(struct file *file, const char __user *buffer,
-			   size_t len, loff_t *ppos)
-{
+	if (!dev || !buf || !len) {
+		pr_err("%s: invalid input param\n", __func__);
+		return -EINVAL;
+	}
 
-	struct seq_file *s = file->private_data;
-	struct decon_device *decon = s->private;
-	struct exynos_hibernation *hiber = decon->hibernation;
-	int ret;
-	bool en;
+	if (kstrtobool(buf, &enable) < 0)
+		return -EINVAL;
 
-	ret = kstrtobool_from_user(buffer, len, &en);
-	if (ret)
-		return ret;
+	decon = dev_get_drvdata(dev);
+	hiber = decon->hibernation;
 
-	if (!en) {
+	if (!decon || !hiber) {
+		pr_err("%s: invalid device\n", __func__);
+		return -ENODEV;
+	}
+
+	DPU_ATRACE_BEGIN(__func__);
+	if (!enable) {
 		/* if disabling, make sure it gets out of hibernation before disabling */
 		hibernation_block_exit(hiber);
 		hiber->enabled = false;
@@ -1514,16 +1594,16 @@ static ssize_t hibernation_write(struct file *file, const char __user *buffer,
 		hibernation_block(hiber);
 	}
 	hibernation_unblock_enter(hiber);
+	DPU_ATRACE_END(__func__);
 
 	return len;
 }
+static DEVICE_ATTR_RW(hibernation);
 
-static const struct file_operations hibernation_fops = {
-	.open = hibernation_open,
-	.read = seq_read,
-	.write = hibernation_write,
-	.llseek = seq_lseek,
-	.release = seq_release,
+static const struct attribute *decon_debug_attrs[] = {
+	&dev_attr_counters.attr,
+	&dev_attr_hibernation.attr,
+	NULL
 };
 
 static int recovery_show(struct seq_file *s, void *unused)
@@ -1559,12 +1639,15 @@ static const struct file_operations recovery_fops = {
 	.release = seq_release,
 };
 
+bool is_console_enabled(void)
+{
+	return exynos_uart_console_enabled();
+}
+
 static void buf_dump_all(const struct decon_device *decon)
 {
-	struct drm_printer p = (console_set_on_cmdline
-				? drm_dbg_printer(decon->drm_dev, DRM_UT_DRIVER,
-						  "[drm]")
-				: drm_info_printer(decon->dev));
+	struct drm_printer p = is_console_enabled() ?
+		drm_debug_printer("[drm]") : drm_info_printer(decon->dev);
 	int i;
 
 	for (i = 0; i < decon->dpp_cnt; ++i)
@@ -1624,6 +1707,51 @@ static const struct file_operations force_te_fops = {
 	.release = seq_release,
 };
 
+static ssize_t tout_write(struct file *file, const char __user *buffer,
+			  size_t len, loff_t *ppos)
+{
+	struct seq_file *s = file->private_data;
+	struct decon_device *decon = s->private;
+	unsigned long flags;
+	int ret;
+	bool en;
+
+	ret = kstrtobool_from_user(buffer, len, &en);
+	if (ret)
+		return ret;
+
+	spin_lock_irqsave(&decon->slock, flags);
+	if (en != decon->d.tout_en) {
+		decon_enable_tout_irq(decon, en);
+		decon->d.tout_en = en;
+	}
+	spin_unlock_irqrestore(&decon->slock, flags);
+
+	return len;
+}
+
+static int tout_show(struct seq_file *s, void *unused)
+{
+	struct decon_device *decon = s->private;
+
+	seq_printf(s, "%d\n", decon->d.tout_en);
+
+	return 0;
+}
+
+static int tout_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, tout_show, inode->i_private);
+}
+
+static const struct file_operations tout_fops = {
+	.open = tout_open,
+	.read = seq_read,
+	.write = tout_write,
+	.llseek = seq_lseek,
+	.release = seq_release,
+};
+
 int dpu_init_debug(struct decon_device *decon)
 {
 	int i;
@@ -1631,6 +1759,7 @@ int dpu_init_debug(struct decon_device *decon)
 	struct drm_crtc *crtc;
 	struct exynos_dqe *dqe = decon->dqe;
 	struct dentry *debug_event;
+	struct dentry *debug_reg_dump;
 	struct dentry *urgent_dent;
 	int ret;
 
@@ -1668,9 +1797,12 @@ int dpu_init_debug(struct decon_device *decon)
 		goto err_event_log;
 	}
 
-	if (decon->hibernation)
-		debugfs_create_file("hibernation", 0664, crtc->debugfs_entry, decon,
-				&hibernation_fops);
+	debug_reg_dump = debugfs_create_file("reg_dump", 0444, crtc->debugfs_entry,
+			decon, &dpu_reg_dump_fops);
+	if (!debug_reg_dump) {
+		DRM_ERROR("failed to create debugfs reg dump file\n");
+		goto err_debugfs;
+	}
 
 	if (!debugfs_create_file("recovery", 0644, crtc->debugfs_entry, decon,
 				&recovery_fops)) {
@@ -1684,10 +1816,13 @@ int dpu_init_debug(struct decon_device *decon)
 		pr_warn("unable to add decon_debug sysfs files (%d)\n", ret);
 
 	debugfs_create_file("force_te_on", 0664, crtc->debugfs_entry, decon, &force_te_fops);
+	debugfs_create_file("tout_en", 0664, crtc->debugfs_entry, decon, &tout_fops);
 	debugfs_create_u32("underrun_cnt", 0664, crtc->debugfs_entry, &decon->d.underrun_cnt);
 	debugfs_create_u32("crc_cnt", 0444, crtc->debugfs_entry, &decon->d.crc_cnt);
 	debugfs_create_u32("ecc_cnt", 0444, crtc->debugfs_entry, &decon->d.ecc_cnt);
 	debugfs_create_u32("idma_err_cnt", 0444, crtc->debugfs_entry, &decon->d.idma_err_cnt);
+	debugfs_create_u32("te_count", 0444, crtc->debugfs_entry, &decon->d.te_cnt);
+	debugfs_create_u32("frame_done_count", 0444, crtc->debugfs_entry, &decon->d.framedone_cnt);
 
 	urgent_dent = debugfs_create_dir("urgent", crtc->debugfs_entry);
 	if (!urgent_dent) {
@@ -1718,6 +1853,41 @@ err_event_log:
 	return -ENOENT;
 }
 
+#if defined(CONFIG_SOC_ZUMA)
+static struct dentry *exynos_debugfs_add_hdr_lut_v2p2(const char *name,
+		struct dentry *parent, struct exynos_debug_info *info,
+		void *ts_lut, size_t ts_cnt, enum elem_size ts_type,
+		void *vs_lut, size_t vs_cnt, enum elem_size vs_type,
+		enum dump_type dump, unsigned int index,
+		struct drm_device *drm)
+{
+	struct dentry *dent, *dent_lut;
+
+	dent = debugfs_create_dir(name, parent);
+	if (!dent) {
+		pr_err("failed to create %s directory\n", name);
+		return NULL;
+	}
+
+	debugfs_create_bool("force_enable", 0664, dent, &info->force_en);
+	debugfs_create_bool("verbose", 0664, dent, &info->verbose);
+	exynos_debugfs_add_dump(dump, 0444, dent, index, 0, drm);
+
+	dent_lut = debugfs_create_dir("lut", dent);
+	if (!dent_lut) {
+		pr_err("failed to create %s lut directory\n", name);
+		debugfs_remove_recursive(dent);
+		return NULL;
+	}
+
+	exynos_debugfs_add_lut("ts", 0664, dent_lut, ts_cnt, 0, ts_lut,
+			NULL,  ts_type, &info->dirty);
+	exynos_debugfs_add_lut("vs", 0664, dent_lut, vs_cnt, 0, vs_lut,
+			NULL,  vs_type, &info->dirty);
+
+	return dent;
+}
+#else
 static struct dentry *exynos_debugfs_add_hdr_lut(const char *name,
 		struct dentry *parent, struct exynos_debug_info *info,
 		void *posx_lut, size_t posx_cnt, enum elem_size posx_type,
@@ -1751,6 +1921,7 @@ static struct dentry *exynos_debugfs_add_hdr_lut(const char *name,
 
 	return dent;
 }
+#endif
 
 static struct dentry *exynos_debugfs_add_gammut(struct exynos_hdr *hdr,
 		struct dentry *parent, enum dump_type dump, unsigned int index,
@@ -1787,6 +1958,33 @@ static struct dentry *exynos_debugfs_add_gammut(struct exynos_hdr *hdr,
 	return dent;
 }
 
+#if defined(CONFIG_SOC_ZUMA)
+static struct dentry *exynos_debugfs_add_tm_v2p2(struct exynos_hdr *hdr,
+		struct dentry *parent, enum dump_type dump, unsigned int index,
+		struct drm_device *drm)
+{
+	struct dentry *dent;
+	struct tm_debug_override *tm = &hdr->tm;
+	struct exynos_debug_info *info = &tm->info;
+	struct hdr_tm_data_v2p2 *tm_data = &tm->force_data;
+
+	dent = exynos_debugfs_add_hdr_lut_v2p2("tone_mapping", parent, info,
+			tm->force_data.ts, DRM_SAMSUNG_HDR_TM_V2P2_LUT_LEN, ELEM_SIZE_32,
+			tm->force_data.vs, DRM_SAMSUNG_HDR_TM_V2P2_LUT_LEN, ELEM_SIZE_32,
+			DUMP_TYPE_HDR_TONEMAP, index, drm);
+
+	debugfs_create_u16("coeff_00", 0664, dent, &tm_data->coeff_00);
+	debugfs_create_u16("coeff_01", 0664, dent, &tm_data->coeff_01);
+	debugfs_create_u16("coeff_02", 0664, dent, &tm_data->coeff_02);
+
+	debugfs_create_u16("ymix_tf", 0664, dent, &tm_data->ymix_tf);
+	debugfs_create_u16("ymix_vf", 0664, dent, &tm_data->ymix_vf);
+	debugfs_create_u16("ymix_slope", 0664, dent, &tm_data->ymix_slope);
+	debugfs_create_u16("ymix_dv", 0664, dent, &tm_data->ymix_dv);
+
+	return dent;
+}
+#else
 static struct dentry *exynos_debugfs_add_tm(struct exynos_hdr *hdr,
 		struct dentry *parent, enum dump_type dump, unsigned int index,
 		struct drm_device *drm)
@@ -1812,6 +2010,7 @@ static struct dentry *exynos_debugfs_add_tm(struct exynos_hdr *hdr,
 
 	return dent;
 }
+#endif
 
 int exynos_drm_debugfs_plane_add(struct exynos_drm_plane *exynos_plane)
 {
@@ -1834,21 +2033,43 @@ int exynos_drm_debugfs_plane_add(struct exynos_drm_plane *exynos_plane)
 		if (!hdr_dent)
 			goto err;
 
+#if defined(CONFIG_SOC_ZUMA)
+		debugfs_create_bool("fp16_en", 0664, hdr_dent, &hdr->fp16_en);
+		debugfs_create_bool("fp16_cvt_en", 0664, hdr_dent, &hdr->fp16_cvt_en);
+		ent = exynos_debugfs_add_hdr_lut_v2p2("eotf", hdr_dent,
+				&hdr->eotf.info, hdr->eotf.force_lut.ts,
+				DRM_SAMSUNG_HDR_EOTF_V2P2_LUT_LEN, ELEM_SIZE_32,
+				hdr->eotf.force_lut.vs,
+				DRM_SAMSUNG_HDR_EOTF_V2P2_LUT_LEN, ELEM_SIZE_32,
+				DUMP_TYPE_HDR_EOTF, plane_index, drm);
+		debugfs_create_u16("scaler", 0664, ent, &hdr->eotf.force_lut.scaler);
+		debugfs_create_bool("lut_en", 0664, ent, &hdr->eotf.force_lut.lut_en);
+#else
 		ent = exynos_debugfs_add_hdr_lut("eotf", hdr_dent,
 				&hdr->eotf.info, hdr->eotf.force_lut.posx,
 				DRM_SAMSUNG_HDR_EOTF_LUT_LEN, ELEM_SIZE_16,
 				hdr->eotf.force_lut.posy,
 				DRM_SAMSUNG_HDR_EOTF_LUT_LEN, ELEM_SIZE_32,
 				DUMP_TYPE_HDR_EOTF, plane_index, drm);
+#endif
 		if (!ent)
 			goto err;
 
+#if defined(CONFIG_SOC_ZUMA)
+		ent = exynos_debugfs_add_hdr_lut_v2p2("oetf", hdr_dent,
+				&hdr->oetf.info, hdr->oetf.force_lut.ts,
+				DRM_SAMSUNG_HDR_OETF_V2P2_LUT_LEN, ELEM_SIZE_32,
+				hdr->oetf.force_lut.vs,
+				DRM_SAMSUNG_HDR_OETF_V2P2_LUT_LEN, ELEM_SIZE_32,
+				DUMP_TYPE_HDR_OETF, plane_index, drm);
+#else
 		ent = exynos_debugfs_add_hdr_lut("oetf", hdr_dent,
 				&hdr->oetf.info, hdr->oetf.force_lut.posx,
 				DRM_SAMSUNG_HDR_OETF_LUT_LEN, ELEM_SIZE_16,
 				hdr->oetf.force_lut.posy,
 				DRM_SAMSUNG_HDR_OETF_LUT_LEN, ELEM_SIZE_16,
 				DUMP_TYPE_HDR_OETF, plane_index, drm);
+#endif
 		if (!ent)
 			goto err;
 
@@ -1859,8 +2080,13 @@ int exynos_drm_debugfs_plane_add(struct exynos_drm_plane *exynos_plane)
 	}
 
 	if (test_bit(DPP_ATTR_HDR10_PLUS, &dpp->attr)) {
+#if defined(CONFIG_SOC_ZUMA)
+		ent = exynos_debugfs_add_tm_v2p2(hdr, hdr_dent ? : root,
+				DUMP_TYPE_HDR_TONEMAP, plane_index, drm);
+#else
 		ent = exynos_debugfs_add_tm(hdr, hdr_dent ? : root,
 				DUMP_TYPE_HDR_TONEMAP, plane_index, drm);
+#endif
 		if (!ent)
 			goto err;
 	}
@@ -1932,7 +2158,7 @@ void decon_dump_all(struct decon_device *decon,
 	decon_dump_event_condition(decon, condition);
 
 	if (active) {
-		decon_dump(decon);
+		decon_dump(decon, NULL);
 		pm_runtime_put(decon->dev);
 	}
 }
@@ -1940,10 +2166,8 @@ void decon_dump_all(struct decon_device *decon,
 void decon_dump_event_condition(const struct decon_device *decon,
 		enum dpu_event_condition condition)
 {
-	struct drm_printer p = (console_set_on_cmdline
-				? drm_dbg_printer(decon->drm_dev, DRM_UT_DRIVER,
-						  "[drm]")
-				: drm_info_printer(decon->dev));
+	struct drm_printer p = is_console_enabled() ?
+		drm_debug_printer("[drm]") : drm_info_printer(decon->dev);
 	u32 print_log_size;
 
 	if (decon_dump_ignore(condition))
@@ -2048,11 +2272,35 @@ static ssize_t dphy_diag_reg_write(struct file *file, const char *user_buf,
 	uint32_t val;
 	struct seq_file *m = file->private_data;
 	struct dsim_dphy_diag *diag = m->private;
+	struct dsim_device *dsim = diag->private;
 
 	ret = kstrtou32_from_user(user_buf, count, 0, &val);
 	if (ret)
 		return ret;
 
+	/* config dphy of another dsim_device for dual dsi */
+	if (dsim->dual_dsi == DSIM_DUAL_DSI_MAIN) {
+		int i;
+		struct dsim_device *sec_dsi = NULL;
+		struct dsim_dphy_diag *sec_diag = NULL;
+
+		sec_dsi = exynos_get_dual_dsi(DSIM_DUAL_DSI_SEC);
+		if (sec_dsi) {
+			/* found the corresponding diag of second dsim device */
+			for (i = 0; i < sec_dsi->config.num_dphy_diags; ++i) {
+				if (!strcmp(sec_dsi->config.dphy_diags[i].name, diag->name)) {
+					sec_diag = &sec_dsi->config.dphy_diags[i];
+					break;
+				}
+			}
+
+			ret = dsim_dphy_diag_set_reg(sec_dsi, sec_diag, val);
+			if (ret)
+				return ret;
+		} else {
+			return -ENODEV;
+		}
+	}
 	ret = dsim_dphy_diag_set_reg(diag->private, diag, val);
 	if (ret)
 		return ret;
@@ -2108,6 +2356,7 @@ void dsim_diag_create_debugfs(struct dsim_device *dsim) {
 	}
 
 	debugfs_create_u32("state", 0400, dsim->debugfs_entry, &dsim->state);
+	debugfs_create_bool("force_set_hs_clk", 0600, dsim->debugfs_entry, &dsim->force_set_hs_clk);
 
 	if (dsim->config.num_dphy_diags == 0)
 		return;

@@ -41,12 +41,20 @@ enum dpp_state {
 
 struct eotf_debug_override {
 	struct exynos_debug_info info;
+#if defined(CONFIG_SOC_ZUMA)
+	struct hdr_eotf_lut_v2p2 force_lut;
+#else
 	struct hdr_eotf_lut force_lut;
+#endif
 };
 
 struct oetf_debug_override {
 	struct exynos_debug_info info;
+#if defined(CONFIG_SOC_ZUMA)
+	struct hdr_oetf_lut_v2p2 force_lut;
+#else
 	struct hdr_oetf_lut force_lut;
+#endif
 };
 
 struct gm_debug_override {
@@ -56,7 +64,11 @@ struct gm_debug_override {
 
 struct tm_debug_override {
 	struct exynos_debug_info info;
+#if defined(CONFIG_SOC_ZUMA)
+	struct hdr_tm_data_v2p2 force_data;
+#else
 	struct hdr_tm_data force_data;
+#endif
 };
 
 struct exynos_hdr {
@@ -66,6 +78,8 @@ struct exynos_hdr {
 	struct oetf_debug_override oetf;
 	struct gm_debug_override gm;
 	struct tm_debug_override tm;
+	bool fp16_en;
+	bool fp16_cvt_en;
 };
 
 struct dpp_device {
@@ -82,6 +96,8 @@ struct dpp_device {
 
 	const uint32_t *pixel_formats;
 	unsigned int num_pixel_formats;
+
+	const uint64_t *format_modifiers;
 
 	struct dpp_regs	regs;
 	struct dpp_params_info win_config;
@@ -146,6 +162,7 @@ void dpp_dump(struct drm_printer *p, struct dpp_device *dpp);
 void rcd_dump(struct drm_printer *p, struct dpp_device *dpp);
 void dpp_dump_buffer(struct drm_printer *p, struct dpp_device *dpp);
 void cgc_dump(struct drm_printer *p, struct exynos_dma *dma);
+bool dpp_need_enable_hdr(const struct dpp_device *dpp);
 
 static __always_inline const char *get_comp_src_name(u64 comp_src)
 {

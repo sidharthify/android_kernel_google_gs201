@@ -28,7 +28,6 @@
 #include <hdr_cal.h>
 
 #include "regs-dpp.h"
-#include "../cal_9855/dpp_cal_internal.h"
 
 #include "../exynos_drm_format.h"
 #include "../exynos_drm_plane.h"
@@ -942,6 +941,12 @@ void dpp_reg_configure_params(u32 id, struct dpp_params_info *p,
 	if (test_bit(DPP_ATTR_AFBC, &attr) || test_bit(DPP_ATTR_SBWC, &attr))
 		idma_reg_set_comp(id, p->comp_type, p->rcv_num);
 
+	if (test_bit(DPP_ATTR_AFBC, &attr)) {
+		dma_write_mask(id, RDMA_AFBC_PARAM,
+				IDMA_AFBC_BLK_SIZE(p->blk_size),
+				IDMA_AFBC_BLK_SIZE_MASK);
+	}
+
 	if (test_bit(DPP_ATTR_SBWC, &attr)) {
 		dma_write_mask(id, RDMA_SBWC_PARAM,
 				IDMA_CHM_BLK_BYTENUM(p->blk_size) |
@@ -962,16 +967,6 @@ void dpp_reg_configure_params(u32 id, struct dpp_params_info *p,
 #if defined(DMA_BIST)
 	idma_reg_set_test_pattern(id, 0, pattern_data);
 #endif
-}
-
-void cgc_reg_set_config(u32 id, bool en, dma_addr_t addr)
-{
-	cgc_reg_set_config_internal(id, en, addr);
-}
-
-void cgc_reg_set_cgc_start(u32 id)
-{
-	cgc_reg_set_cgc_start_internal(id);
 }
 
 u32 dpp_reg_get_irq_and_clear(u32 id)
@@ -1011,15 +1006,6 @@ u32 odma_reg_get_irq_and_clear(u32 id)
 	return val;
 }
 
-u32 cgc_reg_get_irq_and_clear(u32 id)
-{
-	u32 val;
-
-	val = cgc_reg_get_irq_and_clear_internal(id);
-
-	return val;
-}
-
 void dma_reg_get_shd_addr(u32 id, u32 shd_addr[], const unsigned long attr)
 {
 	if (test_bit(DPP_ATTR_IDMA, &attr)) {
@@ -1053,7 +1039,7 @@ static void dpp_reg_dump_ch_data(struct drm_printer *p, int id, enum dpp_reg_are
 	/* TODO: This will be implemented in the future */
 }
 
-static void dma_reg_dump_com_debug_regs(struct drm_printer *p, int id)
+void dma_reg_dump_com_debug_regs(struct drm_printer *p, int id)
 {
 	static bool checked;
 	const u32 sel_glb[99] = {
@@ -1116,7 +1102,7 @@ static void dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
 
 }
 
-static void rcd_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
+void rcd_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
 {
 	cal_drm_printf(p, id, "\n=== DPU_DMA(RCD%d) SFR DUMP ===\n", id);
 	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000, 0x144);
@@ -1127,7 +1113,7 @@ static void rcd_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_r
 	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0300 + DMA_SHD_OFFSET, 0x24);
 }
 
-static void cgc_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
+void cgc_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs)
 {
 	cal_drm_printf(p, id, "\n=== DPU_DMA(CGC%d) SFR DUMP ===\n", id);
 	dpu_print_hex_dump(p, dma_regs, dma_regs + 0x0000, 0x144);
@@ -1162,6 +1148,7 @@ static void dpp_dump_regs(struct drm_printer *p, u32 id, void __iomem *regs, uns
 }
 
 void __dpp_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
+		void __iomem *sramc_regs, void __iomem *hdr_comm_regs, void __iomem *hdr_regs,
 		unsigned long attr)
 {
 	dma_reg_dump_com_debug_regs(p, id);
@@ -1171,19 +1158,6 @@ void __dpp_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem 
 
 	dpp_dump_regs(p, id, regs, attr);
 	dpp_reg_dump_debug_regs(p, id);
-}
-
-void __rcd_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
-		unsigned long attr)
-{
-	dma_reg_dump_com_debug_regs(p, id);
-
-	rcd_dma_dump_regs(p, id, dma_regs);
-}
-
-void __cgc_dump(struct drm_printer *p, u32 id, void __iomem *dma_regs)
-{
-	cgc_dma_dump_regs(p, id, dma_regs);
 }
 
 int __dpp_check(u32 id, const struct dpp_params_info *p, unsigned long attr)

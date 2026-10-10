@@ -19,12 +19,16 @@
 #include <dt-bindings/soc/google/gs101-devfreq.h>
 #elif defined(CONFIG_SOC_GS201)
 #include <dt-bindings/soc/google/gs201-devfreq.h>
+#elif defined(CONFIG_SOC_ZUMA)
+#include <dt-bindings/soc/google/zuma-devfreq.h>
 #endif
 #endif
 #if defined(CONFIG_SOC_GS101)
 #include <dt-bindings/clock/gs101.h>
 #elif defined(CONFIG_SOC_GS201)
 #include <dt-bindings/clock/gs201.h>
+#elif defined(CONFIG_SOC_ZUMA)
+#include <dt-bindings/clock/zuma.h>
 #endif
 
 #if defined(CONFIG_SOC_EXYNOS9610)
@@ -45,9 +49,6 @@
 
 #define ACLK_100MHZ_PERIOD	10000UL
 #define FRAME_TIME_NSEC		1000000000UL	/* 1sec */
-
-/* TODO: remove it after we move logic into bts driver */
-#define NUM_INTERCONNECT_CH		4
 
 #define DPU_DEBUG_BTS(fmt, args...)	pr_debug("[BTS] "fmt,  ##args)
 #define DPU_INFO_BTS(fmt, args...)	pr_info("[BTS] "fmt,  ##args)
@@ -393,6 +394,8 @@ static u64 dpu_bts_calc_aclk_disp(struct decon_device *decon,
 	}
 	aclk_disp = mult_frac(aclk_disp, decon->config.image_height * decon->bts.fps, 1000);
 	aclk_disp_khz = (aclk_disp * margin / 1000) / 1000;
+	if (decon->bts.afbc_clk_ppc_margin && config->is_comp)
+		aclk_disp_khz = mult_frac(aclk_disp_khz, decon->bts.afbc_clk_ppc_margin, 100);
 	aclk_disp_khz /= decon->bts.ppc;
 
 	if (aclk_disp_khz < aclk_panel_khz)
@@ -722,6 +725,10 @@ static void dpu_bts_convert_config_to_info(struct bts_dpp_info *dpp,
 	const struct dpu_fmt *fmt_info;
 
 	fmt_info = dpu_find_fmt_info(config->format);
+	if (!fmt_info) {
+		DPU_ERR_BTS("DPP%d: unable to find fmt_info\n", config->dpp_id);
+		return;
+	}
 	dpp->bpp = fmt_info->bpp + fmt_info->padding;
 	dpp->src_w = config->src_w;
 	dpp->src_h = config->src_h;
@@ -740,6 +747,40 @@ static void dpu_bts_convert_config_to_info(struct bts_dpp_info *dpp,
 			dpp->dst.x1, dpp->dst.x2, dpp->dst.y1, dpp->dst.y2);
 }
 
+static inline u32 dpu_bts_find_max_dpp_read_rt_bw(void)
+{
+	u32 i, max_dpp_read_rt_bw = 0;
+	struct decon_device *decon;
+
+	for (i = 0; i < MAX_DECON_CNT; i++) {
+		decon = get_decon_drvdata(i);
+		if (decon == NULL)
+			continue;
+
+		if (max_dpp_read_rt_bw < decon->bts.max_dpp_read_rt_bw)
+			max_dpp_read_rt_bw = decon->bts.max_dpp_read_rt_bw;
+	}
+
+	return max_dpp_read_rt_bw;
+}
+
+static void dpu_bts_calc_urgent_latency(struct decon_device *decon)
+{
+	u32 i, max_dpp_read_rt_bw;
+
+	if (!decon->bts_urgent_rd_lat.enabled)
+		return;
+
+	max_dpp_read_rt_bw = dpu_bts_find_max_dpp_read_rt_bw();
+	for (i = 0; i < decon->bts_urgent_rd_lat.bw_lat_map_cnt - 1; i++) {
+		if (max_dpp_read_rt_bw <=
+				decon->bts_urgent_rd_lat.bw_lat_tbl[i].bw_kbps)
+			break;
+	}
+
+	decon->bts.urgent_rd_lat = decon->bts_urgent_rd_lat.bw_lat_tbl[i].latency_ns;
+}
+
 static void dpu_bts_calc_bw(struct decon_device *decon)
 {
 	struct drm_crtc *crtc = &decon->crtc->base;
@@ -747,7 +788,7 @@ static void dpu_bts_calc_bw(struct decon_device *decon)
 	struct dpu_bts_win_config *config;
 	struct bts_decon_info bts_info;
 	int idx, i, wb_idx = -1, rcd_idx = -1;
-	u32 read_bw = 0, write_bw;
+	u32 read_bw = 0, write_bw, video_num = 0, max_dpp_read_rt_bw = 0;
 	u64 resol_clock;
 	u32 vblank_us;
 
@@ -783,6 +824,10 @@ static void dpu_bts_calc_bw(struct decon_device *decon)
 				decon->config.image_height, vblank_us,
 				config[i].dpp_id, &decon->bts);
 		read_bw += bts_info.rdma[idx].bw;
+		if (max_dpp_read_rt_bw < bts_info.rdma[idx].rt_bw)
+			max_dpp_read_rt_bw = bts_info.rdma[idx].rt_bw;
+		if (bts_info.rdma[idx].is_yuv)
+			video_num++;
 	}
 
 	/* write bw calculation */
@@ -805,6 +850,8 @@ static void dpu_bts_calc_bw(struct decon_device *decon)
 		dpu_bts_convert_config_to_info(&bts_info.rcddma, config);
 		dpu_bts_calc_dpp_bw(&bts_info.rcddma, decon->bts.fps, bts_info.lcd_h,
 				vblank_us, config->dpp_id, &decon->bts);
+		if (max_dpp_read_rt_bw < bts_info.rcddma.rt_bw)
+			max_dpp_read_rt_bw = bts_info.rcddma.rt_bw;
 		read_bw += bts_info.rcddma.bw;
 	} else {
 		rcd_idx = -1;
@@ -825,10 +872,12 @@ static void dpu_bts_calc_bw(struct decon_device *decon)
 	decon->bts.read_bw = read_bw;
 	decon->bts.write_bw = write_bw;
 	decon->bts.total_bw = read_bw + write_bw;
+	decon->bts.max_dpp_read_rt_bw = max_dpp_read_rt_bw;
+	decon->bts.video_num = video_num;
 
-	DPU_DEBUG_BTS("  DECON%u total bw = %u, read bw = %u, write bw = %u\n",
+	DPU_DEBUG_BTS("  DECON%u total bw = %u, read bw = %u, write bw = %u, max dpp rt_bw = %u\n",
 			decon->id, decon->bts.total_bw, decon->bts.read_bw,
-			decon->bts.write_bw);
+			decon->bts.write_bw, decon->bts.max_dpp_read_rt_bw);
 
 	if (decon->bts.total_bw) {
 		dpu_bts_find_max_disp_freq(decon);
@@ -839,6 +888,7 @@ static void dpu_bts_calc_bw(struct decon_device *decon)
 		decon->bts.max_disp_freq = dpu_bts_calc_disp_with_full_size(decon);
 	}
 
+	dpu_bts_calc_urgent_latency(decon);
 	DPU_EVENT_LOG(DPU_EVT_BTS_CALC_BW, decon->id, crtc_state);
 	DPU_DEBUG_BTS("%s -\n", __func__);
 }
@@ -868,6 +918,58 @@ static inline void dpu_bts_update_disp(struct decon_device *decon, u32 disp_freq
 	DPU_ATRACE_END("dpu_bts_update_disp");
 }
 
+static inline void dpu_bts_update_scenario(struct decon_device *decon, struct bts_bw bw)
+{
+	bool need_vote = false;
+
+	if (!decon->bts_scen.enabled)
+		return;
+
+	if (decon->config.image_width >= decon->bts_scen.min_panel_width &&
+		decon->config.image_height >= decon->bts_scen.min_panel_height &&
+		bw.rt >= decon->bts_scen.min_rt_bw && bw.rt <= decon->bts_scen.max_rt_bw &&
+		bw.peak >= decon->bts_scen.min_peak_bw && bw.peak <= decon->bts_scen.max_peak_bw &&
+		decon->bts.fps >= decon->bts_scen.min_fps &&
+		(!decon->bts_scen.skip_with_video ||
+		 (decon->bts_scen.skip_with_video && !decon->bts.video_num))) {
+		need_vote = true;
+	}
+
+	if (decon->bts_scen.voted != need_vote) {
+		DPU_ATRACE_BEGIN(__func__);
+		if (need_vote) {
+			DPU_DEBUG_BTS("decon%u add bts scenario %u",
+				decon->id, decon->bts_scen.idx);
+			bts_add_scenario(decon->bts_scen.idx);
+		} else {
+			DPU_DEBUG_BTS("decon%u del bts scenario %u",
+				decon->id, decon->bts_scen.idx);
+			bts_del_scenario(decon->bts_scen.idx);
+		}
+		decon->bts_scen.voted = need_vote;
+		DPU_ATRACE_END(__func__);
+	}
+}
+
+static inline void dpu_bts_update_urgent_latency(struct decon_device *decon)
+{
+	unsigned int i;
+
+	if (!decon->bts_urgent_rd_lat.enabled ||
+		decon->bts.urgent_rd_lat == decon->bts.prev_urgent_rd_lat) {
+		return;
+	}
+
+	DPU_ATRACE_BEGIN(__func__);
+	for (i = 0; i < MAX_AXI_PORT; i++) {
+		int index = decon->bts.urgent_rd_lat_index[i];
+
+		bts_set_urgent_lat_read(index, decon->bts.urgent_rd_lat);
+	}
+	decon->bts.prev_urgent_rd_lat = decon->bts.urgent_rd_lat;
+	DPU_ATRACE_END(__func__);
+}
+
 static void dpu_bts_update_resources(struct decon_device *decon, bool shadow_updated)
 {
 	struct bts_bw bw = { 0 };
@@ -895,6 +997,8 @@ static void dpu_bts_update_resources(struct decon_device *decon, bool shadow_upd
 			min(decon->bts.max_disp_freq, decon->bts.max_dfs_lv_for_wb);
 	}
 
+	dpu_bts_update_scenario(decon, bw);
+	dpu_bts_update_urgent_latency(decon);
 	if (shadow_updated) {
 		/* after DECON h/w configs are updated to shadow SFR */
 		if (decon->bts.total_bw < decon->bts.prev_total_bw ||
@@ -933,6 +1037,7 @@ static void dpu_bts_release_resources(struct decon_device *decon)
 	if (!decon->bts.enabled)
 		return;
 
+	dpu_bts_update_scenario(decon, bw);
 	dpu_bts_update_bw(decon, bw);
 	decon->bts.prev_peak = 0;
 	decon->bts.prev_rt_avg_bw = 0;
@@ -942,6 +1047,7 @@ static void dpu_bts_release_resources(struct decon_device *decon)
 
 	// clear shared decon resources
 	decon->bts.rt_avg_bw = 0;
+	decon->bts.max_dpp_read_rt_bw = 0;
 	memset(decon->bts.ch_bw, 0, sizeof(decon->bts.ch_bw));
 
 	DPU_EVENT_LOG(DPU_EVT_BTS_RELEASE_BW, decon->id, NULL);
@@ -975,8 +1081,18 @@ static void dpu_bts_init(struct decon_device *decon)
 			(u32)cal_dfs_get_max_freq(ACPM_DVFS_DISP);
 
 	decon->bts.rt_avg_bw = 0;
-	for (i = 0; i < MAX_AXI_PORT; i++)
+	for (i = 0; i < MAX_AXI_PORT; i++) {
 		decon->bts.ch_bw[i] = 0;
+		if (decon->bts_urgent_rd_lat.enabled) {
+			snprintf(bts_idx_name, MAX_IDX_NAME_SIZE, "bts_dpu%u", i);
+			decon->bts.urgent_rd_lat_index[i] =
+				bts_get_urgent_lat_bts_index(bts_idx_name);
+			if (decon->bts.urgent_rd_lat_index[i] < 0) {
+				decon->bts_urgent_rd_lat.enabled = false;
+				break;
+			}
+		}
+	}
 
 	DPU_DEBUG_BTS("BTS_BW_TYPE(%d)\n", decon->bts.bw_idx);
 	exynos_pm_qos_add_request(&decon->bts.mif_qos,
@@ -1002,6 +1118,19 @@ static void dpu_bts_init(struct decon_device *decon)
 		}
 	}
 
+	decon->bts_scen.enabled = false;
+	if (decon->bts_scen.name && decon->bts_scen.name[0]) {
+		decon->bts_scen.idx = bts_get_scenindex(decon->bts_scen.name);
+		if (decon->bts_scen.idx) {
+			decon->bts_scen.enabled = true;
+			DPU_INFO_BTS("decon%u gets `%s bts scenario idx %u\n",
+				decon->id, decon->bts_scen.name, decon->bts_scen.idx);
+		} else {
+			DPU_ERR_BTS("decon%u failed to get `%s` bts scenario",
+				decon->id, decon->bts_scen.name);
+		}
+	}
+
 	decon->bts.enabled = true;
 
 	DPU_INFO_BTS("decon%u bts feature is enabled\n", decon->id);
@@ -1016,6 +1145,8 @@ static void dpu_bts_deinit(struct decon_device *decon)
 	exynos_pm_qos_remove_request(&decon->bts.disp_qos);
 	exynos_pm_qos_remove_request(&decon->bts.int_qos);
 	exynos_pm_qos_remove_request(&decon->bts.mif_qos);
+	if (decon->bts_scen.enabled && decon->bts_scen.voted)
+		bts_del_scenario(decon->bts_scen.idx);
 	DPU_DEBUG_BTS("%s -\n", __func__);
 }
 

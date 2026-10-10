@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  *
- * Copyright (c) 2019 Samsung Electronics Co., Ltd.
+ * Copyright (c) 2022 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *
- * Header file for GS101 DECON CAL
+ * Header file for GS101/GS201/ZUMA DECON CAL
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -16,9 +16,17 @@
 #include <cal_config.h>
 #include <exynos_panel.h>
 
+#ifdef CONFIG_SOC_ZUMA
+#define MAX_WIN_PER_DECON	14
+#define MAX_AXI_PORT		2
+#define NUM_INTERCONNECT_CH	2
+#else
 #define MAX_WIN_PER_DECON	6
-#define MAX_DECON_CNT		3
 #define MAX_AXI_PORT		3
+#define NUM_INTERCONNECT_CH	4
+#endif
+
+#define MAX_DECON_CNT		3
 #define BTS_DFS_MAX		7 /* DPU DVFS Level */
 
 #define DECON_BLENDING_PREMULT		0
@@ -30,6 +38,9 @@
 #else
 #define MAX_RCD_CNT		0
 #endif
+
+/* connected IDMA starts ahead by 32 lines based on y-position */
+#define DECON_WIN_START_TIME			32
 
 enum decon_regs_id {
 	REGS_DECON0_ID = 0,
@@ -357,13 +368,26 @@ struct decon_dsc {
 	unsigned char *dec_pps_t;
 };
 
+#if defined(CONFIG_SOC_GS201) || defined(CONFIG_SOC_ZUMA)
+void decon_reg_set_rcd_enable_internal(u32 id, bool en);
+#else
+static inline void decon_reg_set_rcd_enable_internal(u32 id, bool en) {}
+void decon_video_mode_reg_update_req_internal(u32 id, bool dqe_need_update);
+#endif
+
+#if defined(CONFIG_SOC_GS201)
+void decon_reg_update_req_cgc_internal(u32 id);
+#else
+static inline void decon_reg_update_req_cgc_internal(u32 id) {}
+#endif
+
 void decon_regs_desc_init(void __iomem *regs, phys_addr_t start, const char *name,
 		enum decon_regs_type type, unsigned int id);
 
 /*************** DECON CAL APIs exposed to DECON driver ***************/
 /* DECON control */
 int decon_reg_init(u32 id, struct decon_config *config);
-int decon_dsc_reg_init(u32 id, struct decon_config *config, u32 overlap_w, u32 swrst);
+void decon_reg_direct_on_off(u32 id, u32 en);
 int decon_reg_start(u32 id, struct decon_config *config);
 int decon_reg_stop(u32 id, struct decon_config *config, bool rst, u32 fps);
 void decon_reg_set_bpc_and_dither_path(u32 id, struct decon_config *config);
@@ -396,7 +420,7 @@ void decon_reg_set_mres(u32 id, struct decon_config *config);
 /* For writeback configuration */
 void decon_reg_release_resource(u32 id, struct decon_mode *mode);
 void decon_reg_config_wb_size(u32 id, struct decon_config *config);
-void decon_reg_set_cwb_enable(u32 id, u32 en);
+void decon_reg_set_cwb_enable(u32 id, bool en);
 
 /* DECON interrupt control */
 void decon_reg_set_interrupts(u32 id, u32 en);
@@ -438,7 +462,21 @@ void __decon_unmap_regs(struct decon_device *decon);
 bool is_decon_using_ch(u32 id, u64 rsc_ch, u32 ch);
 bool is_decon_using_win(u32 id, u64 rsc_win, u32 win);
 
-void decon_reg_set_rcd_enable(u32 dqe_id, bool en);
+#if defined(CONFIG_SOC_GS201) || defined(CONFIG_SOC_ZUMA)
+void decon_video_mode_reg_update_req(u32 id, bool cgc_need_update, bool dqe_need_update);
+#else
+static inline void decon_video_mode_reg_update_req(u32 id,
+	__maybe_unused bool cgc_need_update, bool dqe_need_update)
+{
+	decon_video_mode_reg_update_req_internal(id, dqe_need_update);
+}
+#endif
+
+static inline void decon_reg_set_rcd_enable(u32 dqe_id, bool en)
+{
+	decon_reg_set_rcd_enable_internal(dqe_id, en);
+}
+
 void decon_reg_set_drm_write_protected(u32 id, bool protected);
 /*********************************************************************/
 

@@ -21,7 +21,6 @@
 #include <drm/exynos_drm.h>
 
 #include <linux/atomic.h>
-#include <linux/cleanup.h>
 #include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/console.h>
@@ -54,6 +53,10 @@
 #include "exynos_drm_fb.h"
 #include "exynos_drm_plane.h"
 
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+#include "gs_drm/gs_drm_connector.h"
+#endif
+
 struct decon_device *decon_drvdata[MAX_DECON_CNT];
 
 #define decon_info(decon, fmt, ...)	\
@@ -79,10 +82,17 @@ MODULE_DEVICE_TABLE(of, decon_driver_dt_match);
 static void decon_seamless_mode_set(struct exynos_drm_crtc *exynos_crtc,
 				    struct drm_crtc_state *old_crtc_state);
 static int decon_request_te_irq(struct exynos_drm_crtc *exynos_crtc,
-				const struct exynos_drm_connector_state *exynos_conn_state);
+				const struct drm_connector_state *conn_state);
+static void decon_request_tout_irq(struct decon_device *decon);
 static bool decon_check_fs_pending_locked(struct decon_device *decon);
 
+#ifdef CONFIG_BOARD_EMULATOR
+#define FRAME_TIMEOUT  msecs_to_jiffies(100000)
+#else
 #define FRAME_TIMEOUT msecs_to_jiffies(100)
+#endif
+
+#define MAX_DECON_WAIT_EARLIEST_PROCESS_TIME_USEC 100000
 
 /* wait at least one frame time on top of common timeout */
 static inline unsigned long fps_timeout(int fps)
@@ -92,15 +102,29 @@ static inline unsigned long fps_timeout(int fps)
 
 	return msecs_to_jiffies(frame_time_ms) + FRAME_TIMEOUT;
 }
+void decon_dump(struct decon_device *decon, struct drm_printer *p)
+{
+	unsigned long flags;
 
-void decon_dump(const struct decon_device *decon)
+	spin_lock_irqsave(&decon->slock, flags);
+	decon_dump_locked(decon, p);
+	spin_unlock_irqrestore(&decon->slock, flags);
+}
+
+void decon_dump_locked(const struct decon_device *decon, struct drm_printer *p)
 {
 	int i;
 	struct decon_device *d;
-	struct drm_printer p = (console_set_on_cmdline
-				? drm_dbg_printer(decon->drm_dev, DRM_UT_DRIVER,
-						  "[drm]")
-				: drm_info_printer(decon->dev));
+	struct drm_printer printer;
+	struct drm_printer *pointer;
+
+	if (!p) {
+		printer = is_console_enabled() ?
+			drm_debug_printer("[drm]") : drm_info_printer(decon->dev);
+		pointer = &printer;
+	} else {
+		pointer = p;
+	}
 
 	for (i = 0; i < REGS_DECON_ID_MAX; ++i) {
 		d = get_decon_drvdata(i);
@@ -108,25 +132,25 @@ void decon_dump(const struct decon_device *decon)
 			continue;
 
 		if (d->state != DECON_STATE_ON) {
-			drm_printf(&p, "%s[%u]: DECON state is not On(%d)\n",
+			drm_printf(pointer, "%s[%u]: DECON state is not On(%d)\n",
 				d->dev->driver->name, d->id, d->state);
 			continue;
 		}
 
-		__decon_dump(&p, d->id, &d->regs, d->config.dsc.enabled, d->dqe != NULL);
+		__decon_dump(pointer, d->id, &d->regs, d->config.dsc.enabled, d->dqe != NULL);
 	}
 
 	if (decon->state != DECON_STATE_ON)
 		return;
 
 	for (i = 0; i < decon->dpp_cnt; ++i)
-		dpp_dump(&p, decon->dpp[i]);
+		dpp_dump(pointer, decon->dpp[i]);
 
 	if (decon->rcd)
-		rcd_dump(&p, decon->rcd);
+		rcd_dump(pointer, decon->rcd);
 
 	if (decon->cgc_dma)
-		cgc_dump(&p, decon->cgc_dma);
+		cgc_dump(pointer, decon->cgc_dma);
 }
 
 static inline u32 win_start_pos(int x, int y)
@@ -158,10 +182,13 @@ static void decon_set_color_map(struct decon_device *decon, u32 win_id,
 	win_info.start_pos = win_start_pos(0, 0);
 	win_info.end_pos = win_end_pos(hactive, vactive);
 	win_info.start_time = 0;
+#ifdef CONFIG_BOARD_EMULATOR
+	win_info.colormap = 0x00FF00; /* green */
+#else
 	win_info.colormap = 0x000000; /* black */
+#endif
 	win_info.blend = DECON_BLENDING_NONE;
 	decon_reg_set_window_control(decon->id, win_id, &win_info, true);
-	decon_reg_update_req_window(decon->id, win_id);
 
 	decon_debug(decon, "%s -\n", __func__);
 }
@@ -191,6 +218,55 @@ void decon_enable_te_irq(struct decon_device *decon, bool enable)
 	}
 }
 
+static void decon_set_tout_gpio(struct exynos_drm_crtc *exynos_crtc,
+				const struct drm_connector_state *conn_state)
+{
+	struct decon_device *decon = exynos_crtc->ctx;
+	int tout_gpio;
+
+	if (WARN_ON(!conn_state)) {
+		decon_warn(decon, "%s: conn_state is null!\n", __func__);
+		return;
+	}
+
+	if (is_exynos_drm_connector(conn_state->connector)) {
+		tout_gpio = to_exynos_connector_state(conn_state)->tout_gpio;
+		if (tout_gpio > 0)
+			decon->tout_gpio = tout_gpio;
+	}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	else if (is_gs_drm_connector(conn_state->connector)) {
+		tout_gpio = to_gs_connector_state(conn_state)->tout_gpio;
+		if (tout_gpio > 0)
+			decon->tout_gpio = tout_gpio;
+	}
+#endif
+	else {
+		decon_warn(decon, "%s: invalid drm connector!\n", __func__);
+	}
+}
+
+void decon_enable_tout_irq(struct decon_device *decon, bool enable)
+{
+	decon_info(decon, "%s: en %d, ref %d\n", __func__,
+		   enable, atomic_read(&decon->tout_ref));
+
+	if (enable) {
+		if (atomic_inc_return(&decon->tout_ref) == 1)
+			decon_request_tout_irq(decon);
+	} else {
+		int ret = atomic_dec_if_positive(&decon->tout_ref);
+		if (!ret) {
+			disable_irq_nosync(decon->irq_tout);
+			devm_free_irq(decon->dev, decon->irq_tout, decon);
+			decon->irq_tout = -1;
+			decon->tout_gpio = 0;
+		} else if (ret < 0) {
+			decon_warn(decon, "unexpected tout_ref (%d)\n", ret);
+		}
+	}
+}
+
 static int decon_enable_vblank(struct exynos_drm_crtc *crtc)
 {
 	struct decon_device *decon = crtc->ctx;
@@ -209,6 +285,7 @@ static int decon_enable_vblank(struct exynos_drm_crtc *crtc)
 	else /* if te is not enabled, use framestart interrupt to track vsyncs */
 		enable_irq(decon->irq_fs);
 
+	DPU_ATRACE_INT_PID("vblank", 1, decon->thread->pid);
 	DPU_EVENT_LOG(DPU_EVT_VBLANK_ENABLE, decon->id, NULL);
 
 	decon_debug(decon, "%s -\n", __func__);
@@ -227,6 +304,7 @@ static void decon_disable_vblank(struct exynos_drm_crtc *crtc)
 	else /* if te is not enabled, we're using framestart interrupt to track vsyncs */
 		disable_irq_nosync(decon->irq_fs);
 
+	DPU_ATRACE_INT_PID("vblank", 0, decon->thread->pid);
 	DPU_EVENT_LOG(DPU_EVT_VBLANK_DISABLE, decon->id, NULL);
 
 	hibernation_unblock_enter(decon->hibernation);
@@ -244,6 +322,9 @@ static int decon_get_crtc_out_type(const struct drm_crtc_state *crtc_state)
 
 	drm_for_each_encoder_mask(encoder, dev, crtc_state->encoder_mask) {
 		switch (encoder->encoder_type) {
+		case DRM_MODE_ENCODER_LVDS:
+			out_type = DECON_OUT_DP0;
+			break;
 		case DRM_MODE_ENCODER_VIRTUAL:
 			/* if anything else is connected operate in cwb mode */
 			if (!out_type)
@@ -301,22 +382,22 @@ static bool has_writeback_job(struct drm_crtc_state *new_crtc_state)
 	return false;
 }
 
-static void decon_update_dsi_config(struct decon_config *config,
-				    const struct drm_crtc_state *crtc_state,
-				    const struct exynos_drm_connector_state *exynos_conn_state)
+static void
+update_dsi_config_from_exynos_connector(struct decon_config *config,
+					const struct exynos_drm_connector_state *exynos_conn_state)
 {
-	const struct exynos_display_mode *exynos_mode = &exynos_conn_state->exynos_mode;
 	bool is_vid_mode;
+	const struct exynos_display_mode *exynos_mode = &exynos_conn_state->exynos_mode;
 
 	config->dsc.enabled = exynos_mode->dsc.enabled;
-	if (exynos_mode->dsc.enabled) {
+	if (config->dsc.enabled) {
 		config->dsc.dsc_count = exynos_mode->dsc.dsc_count;
 		config->dsc.slice_count = exynos_mode->dsc.slice_count;
 		config->dsc.slice_height = exynos_mode->dsc.slice_height;
-		config->dsc.slice_width = DIV_ROUND_UP(config->image_width,
-						       config->dsc.slice_count);
+		config->dsc.slice_width = DIV_ROUND_UP(
+			config->image_width / (config->mode.dsi_mode == DSI_MODE_DUAL_DSI ? 2 : 1),
+			config->dsc.slice_count);
 		config->dsc.cfg = exynos_mode->dsc.cfg;
-		config->dsc.delay_reg_init_us = exynos_mode->dsc.delay_reg_init_us;
 		config->dsc.is_scrv4 = exynos_mode->dsc.is_scrv4;
 	}
 
@@ -335,6 +416,63 @@ static void decon_update_dsi_config(struct decon_config *config,
 	}
 }
 
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+static void update_dsi_config_from_gs_connector(struct decon_config *config,
+						const struct gs_drm_connector_state *gs_conn_state)
+{
+	bool is_vid_mode;
+	const struct gs_display_mode *gs_mode = &gs_conn_state->gs_mode;
+
+	config->dsc.enabled = gs_mode->dsc.enabled;
+	if (config->dsc.enabled) {
+		config->dsc.dsc_count = gs_mode->dsc.dsc_count;
+		config->dsc.slice_count = gs_mode->dsc.cfg->slice_count;
+		config->dsc.slice_height = gs_mode->dsc.cfg->slice_height;
+		config->dsc.slice_width = DIV_ROUND_UP(
+			config->image_width / (config->mode.dsi_mode == DSI_MODE_DUAL_DSI ? 2 : 1),
+			config->dsc.slice_count);
+		config->dsc.cfg = gs_mode->dsc.cfg;
+	}
+
+	is_vid_mode = (gs_mode->mode_flags & MIPI_DSI_MODE_VIDEO) != 0;
+
+	config->mode.op_mode = is_vid_mode ? DECON_VIDEO_MODE : DECON_COMMAND_MODE;
+
+	if (!is_vid_mode && !gs_mode->sw_trigger) {
+		if (gs_conn_state->te_from >= MAX_DECON_TE_FROM_DDI) {
+			pr_warn("TE from DDI is not valid (%d)\n", gs_conn_state->te_from);
+		} else {
+			config->mode.trig_mode = DECON_HW_TRIG;
+			config->te_from = gs_conn_state->te_from;
+			pr_debug("TE from DDI%d\n", config->te_from);
+		}
+	}
+}
+#endif
+
+static void decon_update_dsi_config(struct decon_config *config,
+				    const struct drm_crtc_state *crtc_state,
+				    const struct drm_connector_state *conn_state)
+{
+	if (is_exynos_drm_connector(conn_state->connector)) {
+		const struct exynos_drm_connector_state *exynos_conn_state;
+
+		exynos_conn_state = to_exynos_connector_state(conn_state);
+		update_dsi_config_from_exynos_connector(config, exynos_conn_state);
+	}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	else if (is_gs_drm_connector(conn_state->connector)) {
+		const struct gs_drm_connector_state *gs_conn_state;
+
+		gs_conn_state = to_gs_connector_state(conn_state);
+		update_dsi_config_from_gs_connector(config, gs_conn_state);
+	}
+#endif
+	else {
+		pr_warn("%s Unsupported connector type\n", __func__);
+	}
+}
+
 static int decon_get_main_dsim_id(void)
 {
 	const struct dsim_device *dsim = exynos_get_dual_dsi(DSIM_DUAL_DSI_MAIN);
@@ -349,7 +487,7 @@ static int decon_get_main_dsim_id(void)
 
 static void decon_update_config(struct decon_config *config,
 				const struct drm_crtc_state *crtc_state,
-				const struct exynos_drm_connector_state *exynos_conn_state)
+				const struct drm_connector_state *conn_state)
 {
 	const struct drm_display_mode *mode = &crtc_state->adjusted_mode;
 
@@ -370,9 +508,13 @@ static void decon_update_config(struct decon_config *config,
 	config->mode.trig_mode = DECON_SW_TRIG;
 	config->te_from = MAX_DECON_TE_FROM_DDI;
 	config->dsc.enabled = false;
-	config->mode.op_mode = DECON_COMMAND_MODE;
+	config->dsc.dsc_count = 0;
+	if (config->out_type & DECON_OUT_DP)
+		config->mode.op_mode = DECON_VIDEO_MODE;
+	else
+		config->mode.op_mode = DECON_COMMAND_MODE;
 
-	if (!exynos_conn_state) {
+	if (!conn_state) {
 		pr_debug("%s: no private mode config\n", __func__);
 
 		/* default bpc */
@@ -381,18 +523,29 @@ static void decon_update_config(struct decon_config *config,
 	}
 
 	if (config->mode.dsi_mode != DSI_MODE_NONE)
-		decon_update_dsi_config(config, crtc_state, exynos_conn_state);
+		decon_update_dsi_config(config, crtc_state, conn_state);
 
-	config->out_bpc = exynos_conn_state->exynos_mode.bpc;
+	if (is_exynos_drm_connector(conn_state->connector))
+		config->out_bpc = to_exynos_connector_state(conn_state)->exynos_mode.bpc;
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	else if (is_gs_drm_connector(conn_state->connector))
+		config->out_bpc = to_gs_connector_state(conn_state)->gs_mode.bpc;
+#endif
+	else {
+		pr_debug("%s: unsupported connector type\n", __func__);
+		/* default bpc */
+		config->out_bpc = 8;
+		return;
+	}
 }
 
 static bool decon_is_seamless_possible(const struct decon_device *decon,
 				       const struct drm_crtc_state *crtc_state,
-				       const struct exynos_drm_connector_state *exynos_conn_state)
+				       const struct drm_connector_state *conn_state)
 {
 	struct decon_config new_config = decon->config;
 
-	decon_update_config(&new_config, crtc_state, exynos_conn_state);
+	decon_update_config(&new_config, crtc_state, conn_state);
 
 	/* don't allow any changes in decon config */
 	return !memcmp(&new_config, &decon->config, sizeof(new_config));
@@ -404,27 +557,48 @@ static int decon_check_modeset(struct exynos_drm_crtc *exynos_crtc,
 	struct drm_atomic_state *state = crtc_state->state;
 	const struct decon_device *decon = exynos_crtc->ctx;
 	struct exynos_drm_crtc_state *exynos_crtc_state;
-	const struct exynos_drm_connector_state *exynos_conn_state;
 	struct drm_crtc *crtc = &exynos_crtc->base;
 	const struct drm_crtc_state *old_crtc_state = drm_atomic_get_old_crtc_state(state, crtc);
+	const struct drm_connector_state *conn_state;
+	bool conn_state_seamless_possible, dsc_enabled;
+	unsigned int dsc_count;
 
-	exynos_conn_state = crtc_get_exynos_connector_state(state, crtc_state);
-	if (!exynos_conn_state)
+	conn_state = crtc_get_phys_connector_state(state, crtc_state);
+	if (!conn_state)
+		return 0;
+
+	if (is_exynos_drm_connector(conn_state->connector)) {
+		const struct exynos_drm_connector_state *exynos_conn_state;
+
+		exynos_conn_state = to_exynos_connector_state(conn_state);
+		conn_state_seamless_possible = exynos_conn_state->seamless_possible;
+		dsc_enabled = exynos_conn_state->exynos_mode.dsc.enabled;
+		dsc_count = exynos_conn_state->exynos_mode.dsc.dsc_count;
+	}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	else if (is_gs_drm_connector(conn_state->connector)) {
+		const struct gs_drm_connector_state *gs_conn_state;
+
+		gs_conn_state = to_gs_connector_state(conn_state);
+		conn_state_seamless_possible = gs_conn_state->seamless_possible;
+		dsc_enabled = gs_conn_state->gs_mode.dsc.enabled;
+		dsc_count = gs_conn_state->gs_mode.dsc.dsc_count;
+	}
+#endif
+	else
 		return 0;
 
 	/* only decon0 supports more than 1 dsc */
 	if (decon->id != 0) {
-		const struct exynos_display_mode *mode_priv = &exynos_conn_state->exynos_mode;
-
-		if (mode_priv->dsc.enabled && (mode_priv->dsc.dsc_count > 1)) {
-			decon_err(decon, "cannot support %d dsc\n", mode_priv->dsc.dsc_count);
+		if (dsc_enabled && (dsc_count > 1)) {
+			decon_err(decon, "cannot support %d dsc\n", dsc_count);
 			return -EINVAL;
 		}
 	}
 
-	if (exynos_conn_state->seamless_possible && !crtc_state->connectors_changed &&
+	if (conn_state_seamless_possible && !crtc_state->connectors_changed &&
 	    drm_atomic_crtc_effectively_active(old_crtc_state) && crtc_state->active) {
-		if (!decon_is_seamless_possible(decon, crtc_state, exynos_conn_state)) {
+		if (!decon_is_seamless_possible(decon, crtc_state, conn_state)) {
 			decon_warn(decon, "seamless not possible for mode %s\n",
 				   crtc_state->adjusted_mode.name);
 		} else {
@@ -551,12 +725,95 @@ static int decon_atomic_check(struct exynos_drm_crtc *exynos_crtc,
 	return ret;
 }
 
-static void decon_atomic_begin(struct exynos_drm_crtc *crtc)
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+/**
+ * decon_calc_hist_roi() - Calculates ROI components based on screen size parameters
+ * @w: width of screen, in pixels
+ * @h: height of screen, in pixels
+ * @d: depth of ROI center point, in pixels
+ * @r: radius of ROI, in pixels
+ * @x: output parameter: top left x coordinate, in pixels
+ * @y: output parameter: top left y coordinate, in pixels
+ * @side_len: output parameter: side length of ROI rectangle, in pixels
+ */
+static void decon_calc_hist_roi(int w, int h, int d, int r, int *x, int *y, int *side_len)
+{
+	/* calculate ROI rectangle side length (square inscribed in lhbm circle) */
+	int half_side_len = mult_frac(r, 1000, 1414);
+
+	*x = (w / 2) - half_side_len;
+	*y = (h / 2) + d - half_side_len;
+	*side_len = 2 * half_side_len;
+}
+
+static int decon_update_lhbm_hist_roi(struct decon_device *decon, struct drm_atomic_state *state)
+{
+	struct drm_crtc_state *new_crtc_state;
+	struct gs_drm_connector_state *old_gs_connector_state, *new_gs_connector_state;
+
+	new_crtc_state = drm_atomic_get_new_crtc_state(state, &decon->crtc->base);
+	if (!new_crtc_state)
+		return 0;
+
+	old_gs_connector_state = crtc_get_old_gs_connector_state(state, new_crtc_state);
+	new_gs_connector_state = crtc_get_new_gs_connector_state(state, new_crtc_state);
+	if (!old_gs_connector_state || !new_gs_connector_state)
+		return 0;
+
+	if (decon->dqe) {
+		struct dqe_gray_level_callback_data *cb_data =
+			&decon->dqe->gray_level_callback_data;
+
+		cb_data->update_gray_level_callback = gs_drm_connector_update_gray_level_callback;
+		cb_data->conn = new_gs_connector_state->base.connector;
+	}
+
+	/* update if initial (zero-value data), or if config changed */
+	if ((decon->dqe && !decon->dqe->lhbm_hist_configured &&
+	     new_gs_connector_state->lhbm_hist_data.enabled) ||
+	    gs_drm_connector_hist_data_needs_configure(old_gs_connector_state,
+						       new_gs_connector_state)) {
+		struct gs_drm_connector_lhbm_hist_data *hist_data =
+			&new_gs_connector_state->lhbm_hist_data;
+		int w = new_crtc_state->mode.hdisplay;
+		int h = new_crtc_state->mode.vdisplay;
+
+		if (hist_data->roi_type == GS_HIST_ROI_CIRCLE) {
+			int x, y, side_len;
+
+			decon_calc_hist_roi(w, h, hist_data->lhbm_circle_d,
+					    hist_data->lhbm_circle_r, &x, &y, &side_len);
+
+			struct histogram_roi roi = {
+				.start_x = x, .start_y = y, .hsize = side_len, .vsize = side_len
+			};
+
+			return exynos_drm_drv_set_lhbm_hist_gs(
+				decon, &roi, &lhbm_hist_weight[LHBM_CIRCLE_WEIGHT]);
+		} else if (hist_data->roi_type == GS_HIST_ROI_FULL_SCREEN) {
+			struct histogram_roi roi = {
+				.start_x = 0, .start_y = 0, .hsize = w, .vsize = h
+			};
+			return exynos_drm_drv_set_lhbm_hist_gs(
+				decon, &roi, &lhbm_hist_weight[LHBM_FSCREEN_WEIGHT]);
+		} else {
+			decon_warn(decon, "unsupported roi type: %d\n", hist_data->roi_type);
+		}
+	}
+
+	return 0;
+}
+#endif
+
+static void decon_atomic_begin(struct exynos_drm_crtc *crtc, struct drm_atomic_state *state)
 {
 	struct decon_device *decon = crtc->ctx;
 
 	decon_debug(decon, "%s +\n", __func__);
 	DPU_EVENT_LOG(DPU_EVT_ATOMIC_BEGIN, decon->id, NULL);
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	decon_update_lhbm_hist_roi(decon, state);
+#endif
 	decon_reg_wait_update_done_and_mask(decon->id, &decon->config.mode,
 			SHADOW_UPDATE_TIMEOUT_US);
 	decon_debug(decon, "%s -\n", __func__);
@@ -626,6 +883,7 @@ static void decon_update_plane(struct exynos_drm_crtc *exynos_crtc,
 	int win_id;
 	bool is_colormap = false;
 	u16 hw_alpha;
+	unsigned int simplified_rot = 0;
 
 	decon_debug(decon, "%s +\n", __func__);
 
@@ -665,7 +923,18 @@ static void decon_update_plane(struct exynos_drm_crtc *exynos_crtc,
 					exynos_plane_state->base.dst.y1);
 	win_info.end_pos = win_end_pos(exynos_plane_state->base.dst.x2,
 					exynos_plane_state->base.dst.y2);
-	win_info.start_time = 0;
+
+	simplified_rot = drm_rotation_simplify(plane_state->rotation,
+            DRM_MODE_ROTATE_0 | DRM_MODE_ROTATE_90 |
+            DRM_MODE_REFLECT_X | DRM_MODE_REFLECT_Y);
+
+    if ((plane_state->dst.y1 <= DECON_WIN_START_TIME)
+	|| (simplified_rot & DRM_MODE_ROTATE_90)){
+		win_info.start_time = 0;
+	}
+    else{
+		win_info.start_time = DECON_WIN_START_TIME;
+	}
 
 	win_info.ch = dpp->id; /* DPP's id is DPP channel number */
 
@@ -762,36 +1031,38 @@ static void decon_arm_event_locked(struct exynos_drm_crtc *exynos_crtc)
 	decon->event = event;
 }
 
-#define VSYNC_PERIOD_VARIANCE_NS		2000000
 static void decon_wait_earliest_process_time(
 		const struct exynos_drm_crtc_state *old_exynos_crtc_state,
 		const struct exynos_drm_crtc_state *new_exynos_crtc_state)
 {
 	const struct drm_crtc_state *old_crtc_state = &old_exynos_crtc_state->base;
 	const struct drm_crtc_state *new_crtc_state = &new_exynos_crtc_state->base;
-	int32_t vrefresh, vsync_period_ns;
-	ktime_t earliest_process_time, now;
+	int32_t te_freq, vsync_period_ns;
+	ktime_t earliest_process_time, expected_process_duration_ns, now;
+	ktime_t expected_present_time = new_exynos_crtc_state->expected_present_time;
 
-	vrefresh = drm_mode_vrefresh(&old_crtc_state->mode);
-	if (vrefresh == 0) {
+	te_freq = exynos_drm_mode_te_freq(&old_crtc_state->mode);
+	if (te_freq == 0) {
 		/* decon just be enabled */
-		vrefresh = drm_mode_vrefresh(&new_crtc_state->mode);
+		te_freq = exynos_drm_mode_te_freq(&new_crtc_state->mode);
 	}
-	vsync_period_ns = mult_frac(1000, 1000 * 1000, vrefresh);
-	if (ktime_compare(new_exynos_crtc_state->expected_present_time,
-				vsync_period_ns - VSYNC_PERIOD_VARIANCE_NS) <= 0) {
+	vsync_period_ns = mult_frac(1000, 1000 * 1000, te_freq);
+	/* set 1/4 of vsync period as variance */
+	expected_process_duration_ns = mult_frac(vsync_period_ns, 3, 4);
+	if (ktime_compare(expected_present_time, expected_process_duration_ns) <= 0)
 		return;
-	}
 
-	earliest_process_time = ktime_sub_ns(new_exynos_crtc_state->expected_present_time,
-					vsync_period_ns - VSYNC_PERIOD_VARIANCE_NS);
+	earliest_process_time = ktime_sub_ns(expected_present_time, expected_process_duration_ns);
 	now = ktime_get();
 
 	if (ktime_after(earliest_process_time, now)) {
-		int32_t max_delay_us = (10 * vsync_period_ns) / 1000;
+		/*
+		 * Maximum delay is 100ms for 10 Hz.
+		 * Do not rely on |vsync_period_ns| as it varies with VRR configurations.
+		 */
+		const int32_t max_delay_us = MAX_DECON_WAIT_EARLIEST_PROCESS_TIME_USEC;
 		int32_t delay_until_process;
-
-		DPU_ATRACE_BEGIN("wait for earliest present time");
+		const ktime_t WARNING_THRESHOLD_US = 1000;
 
 		delay_until_process = (int32_t)ktime_us_delta(earliest_process_time, now);
 		if (delay_until_process > max_delay_us) {
@@ -799,9 +1070,22 @@ static void decon_wait_earliest_process_time(
 			pr_warn("expected present time seems incorrect(now %llu, earliest %llu)\n",
 					now, earliest_process_time);
 		}
+		DPU_ATRACE_BEGIN("wait for earliest present time (vsync:%d, delay %dus)", te_freq,
+				 delay_until_process);
 		usleep_range(delay_until_process, delay_until_process + 10);
-
 		DPU_ATRACE_END("wait for earliest process time");
+
+		if (ktime_to_us(ktime_sub(expected_present_time, ktime_get())) <
+		    WARNING_THRESHOLD_US) {
+			char trace_str[64];
+			static uint64_t failure_times = 0;
+
+			scnprintf(trace_str, sizeof(trace_str),
+				  "waiting for expected present time: %d us failure:%llu\n",
+				  delay_until_process, ++failure_times);
+			pr_debug("%s", trace_str);
+			DPU_ATRACE_INSTANT(trace_str);
+		}
 	}
 }
 
@@ -894,14 +1178,29 @@ static void decon_atomic_flush(struct exynos_drm_crtc *exynos_crtc,
 		exynos_partial_update(partial, &old_exynos_crtc_state->partial_region,
 				&new_exynos_crtc_state->partial_region);
 
-	decon_reg_all_win_shadow_update_req(decon->id);
-
 	if (new_exynos_crtc_state->seamless_mode_changed)
 		decon_seamless_mode_set(exynos_crtc, old_crtc_state);
 
 	decon_wait_earliest_process_time(old_exynos_crtc_state, new_exynos_crtc_state);
 
 	spin_lock_irqsave(&decon->slock, flags);
+	if (decon->config.mode.op_mode == DECON_COMMAND_MODE) {
+		if (decon->cgc_need_update) {
+			decon_reg_update_req_cgc(decon->id);
+			decon->cgc_need_update = false;
+		}
+		if (decon->dqe_need_update) {
+			decon_reg_update_req_dqe(decon->id);
+			decon->dqe_need_update = false;
+		}
+		decon_reg_all_win_shadow_update_req(decon->id);
+	} else {
+		decon_reg_direct_on_off(decon->id, 1);
+		decon_video_mode_reg_update_req(decon->id, decon->cgc_need_update,
+			decon->dqe_need_update);
+		decon->cgc_need_update = false;
+		decon->dqe_need_update = false;
+	}
 	decon_reg_start(decon->id, &decon->config);
 	atomic_inc(&decon->frames_pending);
 	if (!new_crtc_state->no_vblank)
@@ -917,9 +1216,21 @@ static u32 _decon_get_current_fps(struct decon_device *decon)
 {
 	struct drm_crtc *crtc = &decon->crtc->base;
 	const struct drm_crtc_state *crtc_state = crtc->state;
-	u32 min_fps = min_t(u32, decon->bts.fps, drm_mode_vrefresh(&crtc_state->mode));
+	u32 min_fps;
 
-	return min_fps ? min_fps : 60;
+	if (!crtc_state->enable) {
+		decon_debug(decon, "when turning off the CRTC, use default fps to 60\n");
+		return 60;
+	}
+
+	min_fps = min_t(u32, decon->bts.fps, drm_mode_vrefresh(&crtc_state->mode));
+	if (!min_fps) {
+		decon_warn(decon, "invalid fps (bts.fps=%u, vrefresh=%d), use default fps=60\n",
+			   decon->bts.fps, drm_mode_vrefresh(&crtc_state->mode));
+		return 60;
+	}
+
+	return min_fps;
 }
 
 static void decon_print_config_info(struct decon_device *decon)
@@ -1011,23 +1322,29 @@ static void _decon_mode_update_bts_handover(struct decon_device *decon,
 
 static void decon_mode_update_bts(struct decon_device *decon,
 				const struct drm_display_mode *mode,
-				const unsigned int vblank_usec)
+				const unsigned int vblank_usec,
+				unsigned int min_bts_fps,
+				bool ignore_op_rate)
 {
 	struct videomode vm;
+	int mode_bts_fps = exynos_drm_mode_bts_fps(mode, min_bts_fps);
 
 	drm_display_mode_to_videomode(mode, &vm);
 
 	decon->bts.vbp = vm.vback_porch;
 	decon->bts.vfp = vm.vfront_porch;
 	decon->bts.vsa = vm.vsync_len;
-	decon->bts.fps = drm_mode_vrefresh(mode);
+	decon->bts.fps = (mode_bts_fps >= decon->bts.op_rate ||
+				(!IS_BTS2OPRATE_MODE(mode->flags) || ignore_op_rate)) ?
+					mode_bts_fps : decon->bts.op_rate;
 	decon->bts.vblank_usec = vblank_usec;
 
 	decon->config.image_width = mode->hdisplay;
 	decon->config.image_height = mode->vdisplay;
 
-	decon_debug(decon, "update decon bts config for mode: %dx%dx%d\n",
-		    mode->hdisplay, mode->vdisplay, decon->bts.fps);
+	decon_debug(decon, "update decon bts for mode: %s(%x:%d)(bts fps:%u mode:%d op:%u)\n",
+		   mode->name, mode->flags, mode->clock, decon->bts.fps, mode_bts_fps,
+		   decon->bts.op_rate);
 
 	atomic_set(&decon->bts.delayed_update, 0);
 
@@ -1037,12 +1354,19 @@ static void decon_mode_update_bts(struct decon_device *decon,
 
 static void decon_seamless_mode_bts_update(struct decon_device *decon,
 					const struct drm_display_mode *mode,
-					const unsigned int vblank_usec)
+					const unsigned int vblank_usec,
+					unsigned int min_bts_fps,
+					bool ignore_op_rate)
 {
+	int mode_bts_fps = exynos_drm_mode_bts_fps(mode, min_bts_fps);
+	int request_bts_fps = (mode_bts_fps >= decon->bts.op_rate ||
+				(!IS_BTS2OPRATE_MODE(mode->flags) || ignore_op_rate)) ?
+					mode_bts_fps : decon->bts.op_rate;
+
 	DPU_ATRACE_BEGIN(__func__);
 
 	decon_debug(decon, "seamless mode change from %dhz to %dhz\n",
-		    decon->bts.fps, drm_mode_vrefresh(mode));
+		    decon->bts.fps, request_bts_fps);
 
 	/*
 	 * when going from high->low refresh rate need to run with the higher fps while the
@@ -1051,11 +1375,11 @@ static void decon_seamless_mode_bts_update(struct decon_device *decon,
 	 * TODO: change to 3 to extend the time of higher fps due to b/196466885. Restore to
 	 * 2 once the issue is clarified.
 	 */
-	if (decon->bts.fps > drm_mode_vrefresh(mode)) {
+	if (decon->bts.fps > request_bts_fps) {
 		decon->bts.pending_vblank_usec = vblank_usec;
 		atomic_set(&decon->bts.delayed_update, 3);
 	} else {
-		decon_mode_update_bts(decon, mode, vblank_usec);
+		decon_mode_update_bts(decon, mode, vblank_usec, min_bts_fps, ignore_op_rate);
 	}
 	DPU_ATRACE_END(__func__);
 }
@@ -1065,35 +1389,79 @@ static void decon_seamless_mode_bts_update(struct decon_device *decon,
 static unsigned int decon_get_vblank_usec(const struct drm_crtc_state *crtc_state,
 					const struct drm_atomic_state *old_state)
 {
-	const struct exynos_drm_connector_state *exynos_conn_state =
-			crtc_get_exynos_connector_state(old_state, crtc_state);
-
-	if (WARN_ON(!exynos_conn_state))
+	const struct drm_connector_state *conn_state =
+		crtc_get_phys_connector_state(old_state, crtc_state);
+	if (WARN_ON(!conn_state))
 		return DEFAULT_VBLANK_USEC;
+	if (is_exynos_drm_connector(conn_state->connector)) {
+		const struct exynos_drm_connector_state *exynos_conn_state =
+			to_exynos_connector_state(conn_state);
 
-	return exynos_conn_state->exynos_mode.vblank_usec;
+		return exynos_conn_state->exynos_mode.vblank_usec;
+	}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	else if (is_gs_drm_connector(conn_state->connector)) {
+		const struct gs_drm_connector_state *gs_conn_state =
+			to_gs_connector_state(conn_state);
+
+		return gs_conn_state->gs_mode.vblank_usec;
+	}
+#endif
+	else
+		return DEFAULT_VBLANK_USEC;
 }
 
 void decon_mode_bts_pre_update(struct decon_device *decon,
 				const struct drm_crtc_state *crtc_state,
 				const struct drm_atomic_state *old_state)
 {
+	const struct drm_connector_state *conn_state =
+		crtc_get_phys_connector_state(old_state, crtc_state);
 	const struct exynos_drm_crtc_state *exynos_crtc_state = to_exynos_crtc_state(crtc_state);
+	unsigned int vblank_usec = 0, min_bts_fps = 0;
+	bool ignore_op_rate = false;
 
-	if (exynos_crtc_state->seamless_mode_changed) {
-		unsigned int vblank_usec = decon_get_vblank_usec(crtc_state, old_state);
+	if (conn_state && is_exynos_drm_connector(conn_state->connector)) {
+		const struct exynos_drm_connector_state *exynos_conn_state =
+			to_exynos_connector_state(conn_state);
 
-		decon_seamless_mode_bts_update(decon, &crtc_state->adjusted_mode, vblank_usec);
+		min_bts_fps = exynos_conn_state->exynos_mode.min_bts_fps;
+	}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	else if (conn_state && is_gs_drm_connector(conn_state->connector)) {
+		struct gs_drm_connector_state *gs_conn_state = to_gs_connector_state(conn_state);
+
+		ignore_op_rate = to_gs_connector(conn_state->connector)->ignore_op_rate;
+		min_bts_fps = gs_conn_state->gs_mode.min_bts_fps;
+	}
+#endif
+
+	if (exynos_crtc_state->seamless_mode_changed || decon->bts.pending_fps_update) {
+		if (decon->config.mode.op_mode == DECON_COMMAND_MODE)
+			vblank_usec = decon_get_vblank_usec(crtc_state, old_state);
+
+		decon_seamless_mode_bts_update(decon, &crtc_state->adjusted_mode, vblank_usec,
+					min_bts_fps, ignore_op_rate);
+		decon->bts.pending_fps_update = false;
 	} else if (drm_atomic_crtc_needs_modeset(crtc_state)) {
-		unsigned int vblank_usec = decon_get_vblank_usec(crtc_state, old_state);
+		if (decon->config.mode.op_mode == DECON_COMMAND_MODE)
+			vblank_usec = decon_get_vblank_usec(crtc_state, old_state);
 
-		decon_mode_update_bts(decon, &crtc_state->adjusted_mode, vblank_usec);
+		decon_mode_update_bts(decon, &crtc_state->adjusted_mode, vblank_usec,
+					min_bts_fps, ignore_op_rate);
 	} else if (!atomic_dec_if_positive(&decon->bts.delayed_update)) {
-		decon_mode_update_bts(decon, &crtc_state->mode, decon->bts.pending_vblank_usec);
+		decon_mode_update_bts(decon, &crtc_state->mode, decon->bts.pending_vblank_usec,
+					min_bts_fps, ignore_op_rate);
 	}
 
 	decon->bts.ops->calc_bw(decon);
 	decon->bts.ops->update_bw(decon, false);
+}
+
+void decon_mode_bts_op_rate_update(struct decon_device *decon, u32 op_rate)
+{
+	decon->bts.op_rate = op_rate;
+	decon->bts.pending_fps_update = true;
 }
 #endif
 
@@ -1220,22 +1588,6 @@ static void decon_exit_hibernation(struct decon_device *decon)
 	DPU_EVENT_LOG(DPU_EVT_EXIT_HIBERNATION_OUT, decon->id, NULL);
 }
 
-static void decon_wait_for_te(struct decon_device *decon, int vrefresh)
-{
-	unsigned int te_period_ms = DIV_ROUND_UP(MSEC_PER_SEC, vrefresh);
-
-	reinit_completion(&decon->te_rising);
-
-	DPU_ATRACE_BEGIN(__func__);
-
-	/* Wait for next TE rising or one TE period */
-	if (!wait_for_completion_timeout(&decon->te_rising, te_period_ms))
-		decon_debug(decon, "%s: exceed 1 TE period for %dhz\n",
-			    __func__, vrefresh);
-
-	DPU_ATRACE_END(__func__);
-}
-
 static void decon_enable(struct exynos_drm_crtc *exynos_crtc, struct drm_crtc_state *old_crtc_state)
 {
 	const struct drm_crtc_state *crtc_state = exynos_crtc->base.state;
@@ -1269,14 +1621,33 @@ static void decon_enable(struct exynos_drm_crtc *exynos_crtc, struct drm_crtc_st
 
 	if (crtc_state->mode_changed || crtc_state->connectors_changed) {
 		const struct drm_atomic_state *state = old_crtc_state->state;
-		const struct exynos_drm_connector_state *exynos_conn_state =
-			crtc_get_exynos_connector_state(state, crtc_state);
+		const struct drm_connector_state *conn_state =
+			crtc_get_phys_connector_state(state, crtc_state);
 
-		decon_update_config(&decon->config, crtc_state, exynos_conn_state);
+		decon_update_config(&decon->config, crtc_state, conn_state);
 		DPU_EVENT_LOG(DPU_EVT_DECON_UPDATE_CONFIG, decon->id, NULL);
 
+		/*
+		 * If CRTC(DECON) is connected with DP Connector, exynos_conn_state is NULL and
+		 * DECON's OUT_BPC is set by default 8. It needs to update here.
+		 */
+		if (decon->config.out_type & DECON_OUT_DP) {
+			if (conn_state) {
+				decon_info(decon, "drm_conn_state->max_bpc = %u\n",
+					   conn_state->max_bpc);
+
+				/*
+				 * drm_atomic_connector_check() has been called.
+				 * drm_conn_state->max_bpc has the right value for out_bpc.
+				 */
+				decon->config.out_bpc = conn_state->max_bpc;
+			}
+		}
+
 		if (decon_is_te_enabled(decon))
-			decon_request_te_irq(exynos_crtc, exynos_conn_state);
+			decon_request_te_irq(exynos_crtc, conn_state);
+
+		decon_set_tout_gpio(exynos_crtc, conn_state);
 	}
 
 	pm_runtime_get_sync(decon->dev);
@@ -1300,25 +1671,6 @@ static void decon_enable(struct exynos_drm_crtc *exynos_crtc, struct drm_crtc_st
 	decon_info(decon, "%s -\n", __func__);
 
 ret:
-	if (decon->config.dsc.enabled && decon->config.dsc.delay_reg_init_us) {
-		struct drm_atomic_state *state = old_crtc_state->state;
-		struct exynos_drm_connector_state *exynos_conn_state =
-					crtc_get_exynos_connector_state(state, crtc_state);
-		struct exynos_display_mode *exynos_mode = &exynos_conn_state->exynos_mode;
-		unsigned int delay_us = decon->config.dsc.delay_reg_init_us;
-		unsigned int extra_delay_us =
-				DIV_ROUND_UP(MSEC_PER_SEC, vrefresh) * MSEC_PER_SEC - delay_us;
-
-		decon_wait_for_te(decon, vrefresh);
-		usleep_range(extra_delay_us, extra_delay_us + 100);
-
-		/* remove the delay */
-		exynos_mode->dsc.delay_reg_init_us = 0;
-		decon->config.dsc.delay_reg_init_us = 0;
-
-		decon_dsc_reg_init(decon->id, &decon->config, 0, 0);
-	}
-
 	/* drop extra vote taken to avoid power disable during bypass mode */
 	if (old_exynos_crtc_state->bypass) {
 		decon_debug(decon, "bypass mode: drop extra power ref\n");
@@ -1371,6 +1723,7 @@ static void _decon_disable_locked(struct decon_device *decon, bool reset)
 {
 	decon_disable_irqs(decon);
 	atomic_set(&decon->frames_pending, 0);
+	atomic_set(&decon->frame_transfer_pending, 0);
 	_decon_stop_locked(decon, reset, _decon_get_current_fps(decon));
 }
 
@@ -1435,6 +1788,11 @@ static void decon_disable(struct exynos_drm_crtc *crtc)
 		}
 	}
 
+	if (decon->dqe) {
+		decon->dqe->gray_level_callback_data.conn = NULL;
+		decon->dqe->gray_level_callback_data.update_gray_level_callback = NULL;
+	}
+
 	reset = _decon_wait_for_framedone(decon);
 	spin_lock_irqsave(&decon->slock, flags);
 	if (old_decon_state == DECON_STATE_ON) {
@@ -1459,6 +1817,7 @@ static void decon_wait_for_flip_done(struct exynos_drm_crtc *crtc,
 	struct exynos_drm_crtc_state *new_exynos_crtc_state =
 					to_exynos_crtc_state(new_crtc_state);
 	int fps, recovering;
+	bool fs_success = true;
 
 	if (!new_crtc_state->active)
 		return;
@@ -1485,13 +1844,20 @@ static void decon_wait_for_flip_done(struct exynos_drm_crtc *crtc,
 				    fps, recovering, atomic_read(&decon->frames_pending));
 
 			atomic_set(&decon->frames_pending, 0);
+			atomic_set(&decon->frame_transfer_pending, 0);
 			if (!recovering)
 				decon_dump_all(decon, DPU_EVT_CONDITION_DEFAULT, false);
 
 			decon_force_vblank_event(decon);
 
-			if (!recovering)
+			/*
+			 * Skip recovery on DP DECON.
+			 * Missing framestart means HPD UNPLUG just happened.
+			 * Let the DP unplug handler disable DP as usual.
+			 */
+			if (!recovering && !(decon->config.out_type & DECON_OUT_DP))
 				decon_trigger_recovery(decon);
+			fs_success = false;
 		} else {
 			pr_warn("decon%u scheduler late to service fs irq handle (%d fps)\n",
 					decon->id, fps);
@@ -1506,6 +1872,9 @@ static void decon_wait_for_flip_done(struct exynos_drm_crtc *crtc,
 
 	if (new_exynos_crtc_state->wb_type == EXYNOS_WB_CWB)
 		decon_reg_set_cwb_enable(decon->id, false);
+
+	if (fs_success && decon->dqe)
+		histogram_flip_done(decon->dqe, new_crtc_state);
 }
 
 static const struct exynos_drm_crtc_ops decon_crtc_ops = {
@@ -1521,11 +1890,9 @@ static const struct exynos_drm_crtc_ops decon_crtc_ops = {
 	.wait_for_flip_done = decon_wait_for_flip_done,
 };
 
-static int dpu_sysmmu_fault_handler(struct iommu_domain *domain,
-				    struct device *dev, unsigned long iova,
-				    int flags, void *token)
+static int dpu_sysmmu_fault_handler(struct iommu_fault *fault, void *data)
 {
-	struct decon_device *decon = token;
+	struct decon_device *decon = data;
 
 	if (!decon || !decon_is_effectively_active(decon))
 		return 0;
@@ -1576,8 +1943,8 @@ static int decon_bind(struct device *dev, struct device *master, void *data)
 	struct drm_device *drm_dev = data;
 	struct exynos_drm_private *priv = drm_to_exynos_dev(drm_dev);
 	struct drm_plane *default_plane;
-	struct iommu_domain *domain;
-	int i, ret;
+	int i;
+	int ret;
 	char symlink_name_buffer[7];
 
 	decon->drm_dev = drm_dev;
@@ -1611,11 +1978,7 @@ static int decon_bind(struct device *dev, struct device *master, void *data)
 
 	priv->iommu_client = dev;
 
-	domain = iommu_get_domain_for_dev(dev);
-	if (domain)
-		/* Used just for logging. */
-		iommu_set_fault_handler(domain, dpu_sysmmu_fault_handler,
-					decon);
+	iommu_register_device_fault_handler(dev, dpu_sysmmu_fault_handler, decon);
 
 #if IS_ENABLED(CONFIG_EXYNOS_ITMON)
 	decon->itmon_nb.notifier_call = dpu_itmon_notifier;
@@ -1630,10 +1993,11 @@ static int decon_bind(struct device *dev, struct device *master, void *data)
 	/* Create symlink to decon device */
 	snprintf(symlink_name_buffer, 7, "decon%d", decon->id);
 	ret = sysfs_create_link(&decon->drm_dev->dev->kobj, &decon->dev->kobj,
-			  (const char *) symlink_name_buffer);
-	if (ret)
-		decon_warn(decon, "unable to link decon%d sysfs (%d)\n",
-			   decon->id, ret);
+			(const char *) symlink_name_buffer);
+	if (ret) {
+		pr_err("Error creating symlink to decon%d: %d\n",
+				decon->id, ret);
+	}
 
 	device_create_file(dev, &dev_attr_early_wakeup);
 	decon_debug(decon, "%s -\n", __func__);
@@ -1663,6 +2027,8 @@ static void decon_unbind(struct device *dev, struct device *master,
 #if IS_ENABLED(CONFIG_EXYNOS_ITMON)
 	itmon_notifier_chain_unregister(&decon->itmon_nb);
 #endif
+	iommu_unregister_device_fault_handler(dev);
+
 	decon_debug(decon, "%s -\n", __func__);
 }
 
@@ -1689,7 +2055,9 @@ static irqreturn_t decon_irq_handler(int irq, void *dev_data)
 
 	if (irq_sts_reg & DPU_FRAME_DONE_INT_PEND) {
 		DPU_ATRACE_INT_PID("frame_transfer", 0, decon->thread->pid);
+		atomic_set(&decon->frame_transfer_pending, 0);
 		DPU_EVENT_LOG(DPU_EVT_DECON_FRAMEDONE, decon->id, decon);
+		decon->d.framedone_cnt++;
 		exynos_dqe_save_lpd_data(decon->dqe);
 		atomic_dec_if_positive(&decon->frames_pending);
 		if (decon->dqe)
@@ -1699,6 +2067,7 @@ static irqreturn_t decon_irq_handler(int irq, void *dev_data)
 	}
 
 	if (irq_sts_reg & INT_PEND_DQE_DIMMING_START) {
+		DPU_ATRACE_INT_PID("dqe_dimming", 1, decon->thread->pid);
 		decon->keep_unmask = true;
 		if (decon->config.mode.op_mode == DECON_COMMAND_MODE)
 			decon_reg_set_trigger(decon->id, &decon->config.mode,
@@ -1708,6 +2077,7 @@ static irqreturn_t decon_irq_handler(int irq, void *dev_data)
 	}
 
 	if (irq_sts_reg & INT_PEND_DQE_DIMMING_END) {
+		DPU_ATRACE_INT_PID("dqe_dimming", 0, decon->thread->pid);
 		decon->keep_unmask = false;
 		if (!decon->event && decon->config.mode.op_mode == DECON_COMMAND_MODE)
 			decon_reg_set_trigger(decon->id, &decon->config.mode,
@@ -1721,7 +2091,7 @@ static irqreturn_t decon_irq_handler(int irq, void *dev_data)
 
 	if (ext_irq & DPU_TIME_OUT_INT_PEND) {
 		decon_err(decon, "%s: timeout irq occurs\n", __func__);
-		decon_dump(decon);
+		decon_dump_locked(decon, NULL);
 		WARN_ON(1);
 	}
 
@@ -1741,6 +2111,7 @@ static bool decon_check_fs_pending_locked(struct decon_device *decon)
 
 	if (pending_irq & DPU_FRAME_START_INT_PEND) {
 		DPU_ATRACE_INT_PID("frame_transfer", 1, decon->thread->pid);
+		atomic_set(&decon->frame_transfer_pending, 1);
 		DPU_EVENT_LOG(DPU_EVT_DECON_FRAMESTART, decon->id, decon);
 		decon_send_vblank_event_locked(decon);
 		if (decon->config.mode.op_mode == DECON_VIDEO_MODE)
@@ -1768,9 +2139,11 @@ static irqreturn_t decon_fs_irq_handler(int irq, void *dev_data)
 
 static int decon_parse_dt(struct decon_device *decon, struct device_node *np)
 {
-	struct device_node *dpp_np __free(device_node) = NULL;
+	struct device_node *dpp_np = NULL;
+	struct property *prop;
+	const __be32 *cur;
 	u32 val;
-	int ret = 0, i;
+	int ret = 0, i, count;
 	int dpp_id;
 	u32 dfs_lv_cnt, dfs_lv_khz[BTS_DFS_MAX] = {400000, 0, };
 	bool err_flag = false;
@@ -1844,35 +2217,35 @@ static int decon_parse_dt(struct decon_device *decon, struct device_node *np)
 
 	if (of_property_read_u32(np, "ppc", (u32 *)&decon->bts.ppc))
 		decon->bts.ppc = 2U;
-	decon_info(decon, "PPC(%u)\n", decon->bts.ppc);
+	decon_debug(decon, "PPC(%u)\n", decon->bts.ppc);
 
 	if (of_property_read_u32(np, "ppc_rotator",
 					(u32 *)&decon->bts.ppc_rotator)) {
 		decon->bts.ppc_rotator = 4U;
 		decon_warn(decon, "WARN: rotator ppc is not defined in DT.\n");
 	}
-	decon_info(decon, "rotator ppc(%d)\n", decon->bts.ppc_rotator);
+	decon_debug(decon, "rotator ppc(%d)\n", decon->bts.ppc_rotator);
 
 	if (of_property_read_u32(np, "ppc_scaler",
 					(u32 *)&decon->bts.ppc_scaler)) {
 		decon->bts.ppc_scaler = 2U;
 		decon_warn(decon, "WARN: scaler ppc is not defined in DT.\n");
 	}
-	decon_info(decon, "scaler ppc(%d)\n", decon->bts.ppc_scaler);
+	decon_debug(decon, "scaler ppc(%d)\n", decon->bts.ppc_scaler);
 
 	if (of_property_read_u32(np, "delay_comp",
 				(u32 *)&decon->bts.delay_comp)) {
 		decon->bts.delay_comp = 4UL;
 		decon_warn(decon, "WARN: comp line delay is not defined in DT.\n");
 	}
-	decon_info(decon, "line delay comp(%d)\n", decon->bts.delay_comp);
+	decon_debug(decon, "line delay comp(%d)\n", decon->bts.delay_comp);
 
 	if (of_property_read_u32(np, "delay_scaler",
 				(u32 *)&decon->bts.delay_scaler)) {
 		decon->bts.delay_scaler = 2UL;
 		decon_warn(decon, "WARN: scaler line delay is not defined in DT.\n");
 	}
-	decon_info(decon, "line delay scaler(%d)\n", decon->bts.delay_scaler);
+	decon_debug(decon, "line delay scaler(%d)\n", decon->bts.delay_scaler);
 
 	if (of_property_read_u32(np, "bus_width", &decon->bts.bus_width)) {
 		decon->bts.bus_width = 16;
@@ -1888,28 +2261,88 @@ static int decon_parse_dt(struct decon_device *decon, struct device_node *np)
 	}
 	if (of_property_read_u32(np, "afbc_rgb_util_pct", &decon->bts.afbc_rgb_util_pct)) {
 		decon->bts.afbc_rgb_util_pct = 100;
-		decon_debug(decon, "WARN: afbc_rgb_util_pct is not defined in DT.\n");
+		decon_debug(decon, "INFO: afbc_rgb_util_pct is not defined in DT.\n");
 	}
 	if (of_property_read_u32(np, "afbc_yuv_util_pct", &decon->bts.afbc_yuv_util_pct)) {
 		decon->bts.afbc_yuv_util_pct = 100;
-		decon_debug(decon, "WARN: afbc_yuv_util_pct is not defined in DT.\n");
+		decon_debug(decon, "INFO: afbc_yuv_util_pct is not defined in DT.\n");
 	}
 	if (of_property_read_u32(np, "afbc_rgb_rt_util_pct", &decon->bts.afbc_rgb_rt_util_pct)) {
 		decon->bts.afbc_rgb_rt_util_pct = 100;
-		decon_debug(decon, "WARN: afbc_rgb_rt_util_pct is not defined in DT.\n");
+		decon_debug(decon, "INFO: afbc_rgb_rt_util_pct is not defined in DT.\n");
 	}
 	if (of_property_read_u32(np, "afbc_yuv_rt_util_pct", &decon->bts.afbc_yuv_rt_util_pct)) {
 		decon->bts.afbc_yuv_rt_util_pct = 100;
-		decon_debug(decon, "WARN: afbc_yuv_rt_util_pct is not defined in DT.\n");
+		decon_debug(decon, "INFO: afbc_yuv_rt_util_pct is not defined in DT.\n");
+	}
+	if (of_property_read_u32(np, "afbc_clk_ppc_margin", &decon->bts.afbc_clk_ppc_margin)) {
+		decon->bts.afbc_clk_ppc_margin = 0;
+		decon_debug(decon, "INFO: afbc_clk_margin is not defined in DT.\n");
 	}
 
 	decon_debug(decon, "bus_width(%u) bus_util(%u) rot_util(%u)\n",
 			decon->bts.bus_width, decon->bts.bus_util_pct,
 			decon->bts.rot_util_pct);
 
-	decon_debug(decon, "afbc: rgb_util(%u) yuv_util(%u) rgb_rt_util(%u) yuv_rt_util(%u)\n",
+	decon_debug(decon, "afbc: rgb_util(%u) yuv_util(%u) rgb_rt_util(%u) yuv_rt_util(%u) margin(%u)\n",
 			decon->bts.afbc_rgb_util_pct, decon->bts.afbc_yuv_util_pct,
-			decon->bts.afbc_rgb_rt_util_pct, decon->bts.afbc_yuv_rt_util_pct);
+			decon->bts.afbc_rgb_rt_util_pct, decon->bts.afbc_yuv_rt_util_pct,
+			decon->bts.afbc_clk_ppc_margin);
+
+
+	of_property_read_string(np, "bts_scen_name", &decon->bts_scen.name);
+	if (decon->bts_scen.name && decon->bts_scen.name[0]) {
+		if (of_property_read_u32(np, "bts_scen_min_panel_width", &decon->bts_scen.min_panel_width))
+			decon->bts_scen.min_panel_width = 0;
+		if (of_property_read_u32(np, "bts_scen_min_panel_height", &decon->bts_scen.min_panel_height))
+			decon->bts_scen.min_panel_height = 0;
+		if (of_property_read_u32(np, "bts_scen_min_fps", &decon->bts_scen.min_fps))
+			decon->bts_scen.min_fps = 0;
+		if (of_property_read_u32(np, "bts_scen_min_rt", &decon->bts_scen.min_rt_bw))
+			decon->bts_scen.min_rt_bw = 0;
+		if (of_property_read_u32(np, "bts_scen_max_rt", &decon->bts_scen.max_rt_bw))
+			decon->bts_scen.max_rt_bw = UINT_MAX;
+		if (of_property_read_u32(np, "bts_scen_min_peak", &decon->bts_scen.min_peak_bw))
+			decon->bts_scen.min_peak_bw = 0;
+		if (of_property_read_u32(np, "bts_scen_max_peak", &decon->bts_scen.max_peak_bw))
+			decon->bts_scen.max_peak_bw = UINT_MAX;
+		decon->bts_scen.skip_with_video =
+			of_property_read_bool(np, "bts_scen_skip_with_video");
+		decon_info(decon, "support `%s` under %ux%ux%u, rt %u-%u, peak %u-%u, no-video:%s\n",
+			decon->bts_scen.name,
+			decon->bts_scen.min_panel_width, decon->bts_scen.min_panel_height,
+			decon->bts_scen.min_fps,
+			decon->bts_scen.min_rt_bw, decon->bts_scen.max_rt_bw,
+			decon->bts_scen.min_peak_bw, decon->bts_scen.max_peak_bw,
+			(decon->bts_scen.skip_with_video) ? "yes" : "no");
+	} else {
+		decon_info(decon, "not support to set dpu bts scenario under certain condition.\n");
+	}
+
+
+	count = of_property_count_u32_elems(np, "bw_lat_rd_map");
+	if (count > 0 && !(count % 2)) {
+		u32 map_cnt;
+		struct bw_latency_map *tbl;
+
+		map_cnt = count / 2;
+		tbl = devm_kcalloc(decon->dev, map_cnt,
+				sizeof(struct bw_latency_map), GFP_KERNEL);
+		if (tbl) {
+			if (!of_property_read_u32_array(np, "bw_lat_rd_map",
+					(u32 *)tbl,
+					(size_t)count)) {
+				decon_info(decon, "support set urgent latency at runtime\n");
+				for (i = 0; i < map_cnt; i++) {
+					decon_info(decon, "[%d] %8u kbps %4u ns\n",
+						i, tbl[i].bw_kbps, tbl[i].latency_ns);
+				}
+				decon->bts_urgent_rd_lat.bw_lat_map_cnt = map_cnt;
+				decon->bts_urgent_rd_lat.bw_lat_tbl = tbl;
+				decon->bts_urgent_rd_lat.enabled = true;
+			}
+		}
+	}
 
 	if (of_property_read_u32(np, "dfs_lv_cnt", &dfs_lv_cnt)) {
 		err_flag = true;
@@ -1921,12 +2354,12 @@ static int decon_parse_dt(struct decon_device *decon, struct device_node *np)
 
 	if (!err_flag) {
 		of_property_read_u32_array(np, "dfs_lv", dfs_lv_khz, dfs_lv_cnt);
-		decon_info(decon, "DPU DFS Level : ");
+		decon_debug(decon, "DPU DFS Level : ");
 		for (i = 0; i < dfs_lv_cnt; i++) {
 			decon->bts.dfs_lv_khz[i] = dfs_lv_khz[i];
-			decon_info(decon, "%6d ", dfs_lv_khz[i]);
+			decon_debug(decon, "%6d ", dfs_lv_khz[i]);
 		}
-		decon_info(decon, "\n");
+		decon_debug(decon, "\n");
 	}
 
 	if (of_property_read_u32(np, "max_dfs_lv_for_wb", &decon->bts.max_dfs_lv_for_wb)) {
@@ -1951,9 +2384,10 @@ static int decon_parse_dt(struct decon_device *decon, struct device_node *np)
 		}
 
 		dpp_id = decon->dpp[i]->id;
-		decon_info(decon, "found dpp%d\n", dpp_id);
+		decon_debug(decon, "found dpp%d\n", dpp_id);
 
-		of_node_put(dpp_np);
+		if (dpp_np)
+			of_node_put(dpp_np);
 	}
 
 	/* RCD Function */
@@ -1967,7 +2401,10 @@ static int decon_parse_dt(struct decon_device *decon, struct device_node *np)
 	else
 		decon_debug(decon, "found rcd: dpp%d\n", decon->rcd->id);
 
-	of_property_for_each_u32(np, "connector", val)
+	if (dpp_np)
+		of_node_put(dpp_np);
+
+	of_property_for_each_u32(np, "connector", prop, cur, val)
 		decon->con_type |= val;
 
 	return 0;
@@ -1986,9 +2423,9 @@ static int decon_remap_regs(struct decon_device *decon)
 		goto err;
 	}
 	decon->regs.regs = ioremap(res.start, resource_size(&res));
-	if (IS_ERR(decon->regs.regs)) {
+	if (!decon->regs.regs) {
 		decon_err(decon, "failed decon ioremap\n");
-		ret = PTR_ERR(decon->regs.regs);
+		ret = -ENOMEM;
 		goto err;
 	}
 	decon_regs_desc_init(decon->regs.regs, res.start, "decon", REGS_DECON,
@@ -2003,10 +2440,8 @@ static int decon_remap_regs(struct decon_device *decon)
 	i = of_property_match_string(np, "reg-names", "sys");
 	if (of_address_to_resource(np, i, &res)) {
 		decon_err(decon, "failed to get sys resource\n");
-		goto err_node_put;
+		goto err_main;
 	}
-	of_node_put(np);
-
 	decon->regs.ss_regs = ioremap(res.start, resource_size(&res));
 	if (!decon->regs.ss_regs) {
 		decon_err(decon, "failed to map sysreg-disp address.");
@@ -2018,8 +2453,6 @@ static int decon_remap_regs(struct decon_device *decon)
 
 	return ret;
 
-err_node_put:
-	of_node_put(np);
 err_main:
 	iounmap(decon->regs.regs);
 err:
@@ -2050,9 +2483,6 @@ static irqreturn_t decon_te_irq_handler(int irq, void *dev_id)
 	}
 	DPU_EVENT_LOG(DPU_EVT_TE_INTERRUPT, decon->id, NULL);
 
-	if (decon->config.dsc.delay_reg_init_us)
-		complete_all(&decon->te_rising);
-
 	if (decon->config.mode.op_mode == DECON_COMMAND_MODE)
 		drm_crtc_handle_vblank(&decon->crtc->base);
 
@@ -2061,22 +2491,36 @@ end:
 }
 
 static int decon_request_te_irq(struct exynos_drm_crtc *exynos_crtc,
-				const struct exynos_drm_connector_state *exynos_conn_state)
+				const struct drm_connector_state *conn_state)
 {
 	struct decon_device *decon = exynos_crtc->ctx;
-	int ret, irq;
+	int ret, irq, te_gpio;
 	unsigned long flags = IRQF_TRIGGER_RISING;
 
-	if (WARN_ON(!exynos_conn_state))
+	if (WARN_ON(!conn_state))
 		return -EINVAL;
 
 	WARN(decon->irq_te >= 0, "unbalanced te irq\n");
 
-	irq = gpio_to_irq(exynos_conn_state->te_gpio);
-	if (decon->d.force_te_on && exynos_conn_state->te_gpio > 0) {
-		flags |= IRQF_TRIGGER_FALLING;
-		decon->te_gpio = exynos_conn_state->te_gpio;
+	if (is_exynos_drm_connector(conn_state->connector)) {
+		te_gpio = to_exynos_connector_state(conn_state)->te_gpio;
+		if (decon->d.force_te_on && te_gpio > 0) {
+			flags |= IRQF_TRIGGER_FALLING;
+			decon->te_gpio = te_gpio;
+		}
 	}
+#if IS_ENABLED(CONFIG_GS_DRM_PANEL_UNIFIED)
+	else if (is_gs_drm_connector(conn_state->connector)) {
+		te_gpio = to_gs_connector_state(conn_state)->te_gpio;
+		if (decon->d.force_te_on && te_gpio > 0) {
+			flags |= IRQF_TRIGGER_FALLING;
+			decon->te_gpio = te_gpio;
+		}
+	}
+#endif
+	else
+		return -EINVAL;
+	irq = gpio_to_irq(te_gpio);
 
 	decon_debug(decon, "TE irq number(%d)\n", irq);
 	irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
@@ -2089,6 +2533,38 @@ static int decon_request_te_irq(struct exynos_drm_crtc *exynos_crtc,
 	}
 
 	return ret;
+}
+
+static irqreturn_t decon_tout_irq_handler(int irq, void *dev_id)
+{
+	struct decon_device *decon = dev_id;
+
+	if (!decon)
+		goto end;
+
+	pr_debug("%s: state(%d)\n", __func__, decon->state);
+
+	if (decon->tout_gpio > 0)
+		DPU_ATRACE_INT_PID("TE2", gpio_get_value(decon->tout_gpio),
+				   decon->thread->pid);
+
+end:
+	return IRQ_HANDLED;
+}
+
+static void decon_request_tout_irq(struct decon_device *decon)
+{
+	int irq = gpio_to_irq(decon->tout_gpio);
+
+	irq_set_status_flags(irq, IRQ_DISABLE_UNLAZY);
+	if (!devm_request_irq(decon->dev, irq, decon_tout_irq_handler,
+			      IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
+			      "exynos-crtc-0", decon)) {
+		decon->irq_tout = irq;
+		decon_info(decon, "requested irq for tout (te2)\n");
+	} else {
+		decon_warn(decon, "failed to request irq for tout (te2)\n");
+	}
 }
 
 static int decon_register_irqs(struct decon_device *decon)
@@ -2160,13 +2636,13 @@ static int decon_get_clock(struct decon_device *decon)
 {
 	decon->res.aclk = devm_clk_get(decon->dev, "aclk");
 	if (IS_ERR_OR_NULL(decon->res.aclk)) {
-		decon_info(decon, "failed to get aclk(optional)\n");
+		decon_debug(decon, "failed to get aclk(optional)\n");
 		decon->res.aclk = NULL;
 	}
 
 	decon->res.aclk_disp = devm_clk_get(decon->dev, "aclk-disp");
 	if (IS_ERR_OR_NULL(decon->res.aclk_disp)) {
-		decon_info(decon, "failed to get aclk_disp(optional)\n");
+		decon_debug(decon, "failed to get aclk_disp(optional)\n");
 		decon->res.aclk_disp = NULL;
 	}
 
@@ -2225,7 +2701,6 @@ static int decon_probe(struct platform_device *pdev)
 
 	spin_lock_init(&decon->slock);
 	init_waitqueue_head(&decon->framedone_wait);
-	init_completion(&decon->te_rising);
 
 	ret = decon_init_resources(decon);
 	if (ret)
@@ -2268,7 +2743,7 @@ err:
 	return ret;
 }
 
-static void decon_remove(struct platform_device *pdev)
+static int decon_remove(struct platform_device *pdev)
 {
 	struct decon_device *decon = platform_get_drvdata(pdev);
 
@@ -2281,6 +2756,8 @@ static void decon_remove(struct platform_device *pdev)
 
 	__decon_unmap_regs(decon);
 	iounmap(decon->regs.regs);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM

@@ -85,10 +85,12 @@ enum {
 };
 
 struct dsim_clks {
-	u32 hs_clk;
+	u32 hs_clk; /* megabits per second */
 	u32 esc_clk;
 	u32 byte_clk;
 	u32 word_clk;
+	u32 pending_hs_clk; /* megabits per second */
+	bool hs_clk_changed;
 };
 
 struct dsim_regs {
@@ -203,7 +205,7 @@ void dsim_reg_init(u32 id, struct dsim_reg_config *config,
 		struct dsim_clks *clks, bool panel_ctrl);
 void dsim_reg_start(u32 id);
 int dsim_reg_stop(u32 id, u32 lanes);
-void dsim_reg_set_vrr_config(u32 id, const struct dsim_reg_config *config,
+void dsim_reg_set_rr_config(u32 id, const struct dsim_reg_config *config,
 		struct dsim_clks *clks);
 bool dsim_reg_is_pll_stable(u32 id);
 

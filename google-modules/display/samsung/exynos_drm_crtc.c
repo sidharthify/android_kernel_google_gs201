@@ -94,6 +94,7 @@ static void exynos_crtc_update_lut(struct drm_crtc *crtc,
 	struct decon_device *decon = exynos_crtc->ctx;
 	struct exynos_drm_crtc_state *exynos_state;
 	struct exynos_dqe_state *dqe_state;
+	int i;
 
 	if (!decon->dqe)
 		return;
@@ -118,10 +119,12 @@ static void exynos_crtc_update_lut(struct drm_crtc *crtc,
 	else
 		dqe_state->cgc_dither_config = NULL;
 
-	dqe_state->roi = exynos_state->histogram_roi ?
-		exynos_state->histogram_roi->data : NULL;
-	dqe_state->weights = exynos_state->histogram_weights ?
-		exynos_state->histogram_weights->data : NULL;
+	for (i = 0; i < HISTOGRAM_MAX; i++) {
+		if (exynos_state->histogram[i])
+			dqe_state->hist_chan[i].config = exynos_state->histogram[i]->data;
+		else
+			dqe_state->hist_chan[i].config = NULL;
+	}
 
 	if (exynos_state->linear_matrix)
 		dqe_state->linear_matrix = exynos_state->linear_matrix->data;
@@ -181,17 +184,31 @@ static int exynos_crtc_atomic_check(struct drm_crtc *crtc,
 	if (dqe && (dqe->force_disabled || !new_exynos_state->dqe.enabled) &&
 			(decon->config.out_bpc == 8)) {
 		new_exynos_state->in_bpc = 8;
+	} else if (decon->config.out_type & DECON_OUT_DP) {
+		/*
+		 * Now, it is force to configure 8 BPC output for DP Path.
+		 * To support 10 BPC input stream, DECON Input BPC needs to be set as 10 BPC.
+		 */
+		new_exynos_state->in_bpc = 10;	// Force 10 BPC Input
 	} else if (new_exynos_state->force_bpc == EXYNOS_BPC_MODE_UNSPECIFIED) {
-		max_bpc = 8; /* initial bpc value */
-		drm_atomic_crtc_state_for_each_plane_state(plane, plane_state, crtc_state) {
-			const struct drm_format_info *info;
-			const struct dpu_fmt *fmt_info;
+		/*
+		 * When force_bpc is not specified,
+		 * CRTC's input BPC should be binded as output BPC or Plane's format.
+		 */
+		if (decon->config.out_bpc == 10) {
+			max_bpc = 10;
+		} else {
+			max_bpc = 8; /* initial bpc value */
+			drm_atomic_crtc_state_for_each_plane_state(plane, plane_state, crtc_state) {
+				const struct drm_format_info *info;
+				const struct dpu_fmt *fmt_info;
 
-			info = plane_state->fb->format;
-			fmt_info = dpu_find_fmt_info(info->format);
-			if (fmt_info->bpc == 10) {
-				max_bpc = 10;
-				break;
+				info = plane_state->fb->format;
+				fmt_info = dpu_find_fmt_info(info->format);
+				if (fmt_info->bpc == 10) {
+					max_bpc = 10;
+					break;
+				}
 			}
 		}
 		new_exynos_state->in_bpc = max_bpc;
@@ -222,8 +239,13 @@ static int exynos_crtc_atomic_check(struct drm_crtc *crtc,
 		new_exynos_state->skip_update = true;
 		crtc_state->no_vblank = true;
 	} else if (old_crtc_state->self_refresh_active && !crtc_state->color_mgmt_changed &&
-	    !new_exynos_state->planes_updated)
+		!new_exynos_state->planes_updated) {
 		new_exynos_state->skip_update = true;
+	} else if (drm_atomic_crtc_effectively_active(old_crtc_state) &&
+		   (crtc_state->plane_mask & (~exynos_crtc->rcd_plane_mask)) == 0) {
+		DRM_WARN("%s: plane-less update is detected, mask=0x%08X\n", __func__,
+			 crtc_state->plane_mask);
+	}
 
 	if (decon->rcd) {
 		uint32_t rcd_mask = crtc_state->plane_mask & exynos_crtc->rcd_plane_mask;
@@ -253,7 +275,7 @@ static void exynos_crtc_atomic_begin(struct drm_crtc *crtc,
 	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(crtc);
 
 	if (exynos_crtc->ops->atomic_begin)
-		exynos_crtc->ops->atomic_begin(exynos_crtc);
+		exynos_crtc->ops->atomic_begin(exynos_crtc, state);
 }
 
 static void exynos_crtc_atomic_flush(struct drm_crtc *crtc,
@@ -329,14 +351,6 @@ void exynos_crtc_handle_event(struct exynos_drm_crtc *exynos_crtc)
 	spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
 }
 
-static void exynos_drm_crtc_destroy(struct drm_crtc *crtc)
-{
-	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(crtc);
-
-	drm_crtc_cleanup(crtc);
-	kfree(exynos_crtc);
-}
-
 static int exynos_drm_crtc_enable_vblank(struct drm_crtc *crtc)
 {
 	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(crtc);
@@ -369,6 +383,7 @@ static void exynos_drm_crtc_destroy_state(struct drm_crtc *crtc,
 					struct drm_crtc_state *state)
 {
 	struct exynos_drm_crtc_state *exynos_crtc_state;
+	int i;
 
 	exynos_crtc_state = to_exynos_crtc_state(state);
 	drm_property_blob_put(exynos_crtc_state->cgc_lut);
@@ -379,6 +394,9 @@ static void exynos_drm_crtc_destroy_state(struct drm_crtc *crtc,
 	drm_property_blob_put(exynos_crtc_state->histogram_roi);
 	drm_property_blob_put(exynos_crtc_state->histogram_weights);
 	drm_property_blob_put(exynos_crtc_state->partial);
+	for (i = 0; i < HISTOGRAM_MAX; i++)
+		drm_property_blob_put(exynos_crtc_state->histogram[i]);
+
 	if (exynos_crtc_state->cgc_gem)
 		drm_gem_object_put(exynos_crtc_state->cgc_gem);
 	__drm_atomic_helper_crtc_destroy_state(state);
@@ -408,6 +426,7 @@ exynos_drm_crtc_duplicate_state(struct drm_crtc *crtc)
 {
 	struct exynos_drm_crtc_state *exynos_crtc_state;
 	struct exynos_drm_crtc_state *copy;
+	int i;
 
 	exynos_crtc_state = to_exynos_crtc_state(crtc->state);
 	copy = kzalloc(sizeof(*copy), GFP_KERNEL);
@@ -436,6 +455,11 @@ exynos_drm_crtc_duplicate_state(struct drm_crtc *crtc)
 
 	if (copy->histogram_weights)
 		drm_property_blob_get(copy->histogram_weights);
+
+	for (i = 0; i < HISTOGRAM_MAX; i++) {
+		if (copy->histogram[i])
+			drm_property_blob_get(copy->histogram[i]);
+	}
 
 	if (copy->partial)
 		drm_property_blob_get(copy->partial);
@@ -650,11 +674,6 @@ static int exynos_drm_crtc_set_property(struct drm_crtc *crtc,
 			exynos_crtc_state->dqe.enabled = val;
 			replaced = true;
 		}
-	} else if (property == exynos_crtc->props.histogram_threshold) {
-		if (val != exynos_crtc_state->dqe.histogram_threshold) {
-			exynos_crtc_state->dqe.histogram_threshold = val;
-			replaced = true;
-		}
 	} else if (property == exynos_crtc->props.cgc_lut) {
 		ret = exynos_drm_replace_property_blob_from_id(state->crtc->dev,
 				&exynos_crtc_state->cgc_lut, val,
@@ -676,17 +695,38 @@ static int exynos_drm_crtc_set_property(struct drm_crtc *crtc,
 				&exynos_crtc_state->gamma_matrix, val,
 				sizeof(struct exynos_matrix), -1, &replaced);
 	} else if (property == exynos_crtc->props.histogram_roi) {
+		pr_warn_once("legacy property(%s): ignored\n", property->name);
 		ret = exynos_drm_replace_property_blob_from_id(state->crtc->dev,
 				&exynos_crtc_state->histogram_roi, val,
 				sizeof(struct histogram_roi), -1, &replaced);
 	} else if (property == exynos_crtc->props.histogram_weights) {
+		pr_warn_once("legacy property(%s): ignored\n", property->name);
 		ret = exynos_drm_replace_property_blob_from_id(state->crtc->dev,
 				&exynos_crtc_state->histogram_weights, val,
 				sizeof(struct histogram_weights), -1, &replaced);
 	} else if (property == exynos_crtc->props.histogram_pos) {
+		pr_warn_once("legacy property(%s): ignored\n", property->name);
 		if (val != exynos_crtc_state->dqe.histogram_pos) {
 			exynos_crtc_state->dqe.histogram_pos = val;
 			replaced = true;
+		}
+	} else if (property == exynos_crtc->props.histogram_threshold) {
+		pr_warn_once("legacy property(%s): ignored\n", property->name);
+		if (val != exynos_crtc_state->dqe.histogram_threshold) {
+			exynos_crtc_state->dqe.histogram_threshold = val;
+			replaced = true;
+		}
+	} else if (!strncmp(property->name, "histogram_", 10)) {
+		int i;
+
+		ret = -EINVAL; /* assume an error by default */
+		for (i = 0; i < HISTOGRAM_MAX; i++) {
+			if (property == exynos_crtc->props.histogram[i]) {
+				ret = exynos_drm_replace_property_blob_from_id(state->crtc->dev,
+					&exynos_crtc_state->histogram[i], val,
+					sizeof(struct histogram_channel_config), -1, &replaced);
+				break;
+			}
 		}
 	} else if (property == exynos_crtc->props.partial) {
 		ret = exynos_drm_replace_property_blob_from_id(state->crtc->dev,
@@ -721,53 +761,71 @@ static int exynos_drm_crtc_get_property(struct drm_crtc *crtc,
 	exynos_crtc_state =
 		to_exynos_crtc_state((struct drm_crtc_state *)state);
 
-	if (property == exynos_crtc->props.color_mode)
+	if (property == exynos_crtc->props.color_mode) {
 		*val = exynos_crtc_state->color_mode;
-	else if (property == exynos_crtc->props.ppc)
+	} else if (property == exynos_crtc->props.ppc) {
 		*val = decon->bts.ppc;
-	else if (property == exynos_crtc->props.max_disp_freq)
+	} else if (property == exynos_crtc->props.max_disp_freq) {
 		*val = decon->bts.dvfs_max_disp_freq;
-	else if (property == exynos_crtc->props.force_bpc)
+	} else if (property == exynos_crtc->props.force_bpc) {
 		*val = exynos_crtc_state->force_bpc;
-	else if (property == exynos_crtc->props.dqe_enabled)
+	} else if (property == exynos_crtc->props.dqe_enabled) {
 		*val = exynos_crtc_state->dqe.enabled;
-	else if (property == exynos_crtc->props.histogram_threshold)
-		*val = exynos_crtc_state->dqe.histogram_threshold;
-	else if (property == exynos_crtc->props.cgc_lut)
+	} else if (property == exynos_crtc->props.cgc_lut) {
 		*val = (exynos_crtc_state->cgc_lut) ?
 			exynos_crtc_state->cgc_lut->base.id : 0;
-	else if (property == exynos_crtc->props.disp_dither)
+	} else if (property == exynos_crtc->props.disp_dither) {
 		*val = (exynos_crtc_state->disp_dither) ?
 			exynos_crtc_state->disp_dither->base.id : 0;
-	else if (property == exynos_crtc->props.cgc_dither)
+	} else if (property == exynos_crtc->props.cgc_dither) {
 		*val = (exynos_crtc_state->cgc_dither) ?
 			exynos_crtc_state->cgc_dither->base.id : 0;
-	else if (property == exynos_crtc->props.linear_matrix)
+	} else if (property == exynos_crtc->props.linear_matrix) {
 		*val = (exynos_crtc_state->linear_matrix) ?
 			exynos_crtc_state->linear_matrix->base.id : 0;
-	else if (property == exynos_crtc->props.gamma_matrix)
+	} else if (property == exynos_crtc->props.gamma_matrix) {
 		*val = (exynos_crtc_state->gamma_matrix) ?
 			exynos_crtc_state->gamma_matrix->base.id : 0;
-	else if (property == exynos_crtc->props.histogram_roi)
-		*val = (exynos_crtc_state->histogram_roi) ?
-			exynos_crtc_state->histogram_roi->base.id : 0;
-	else if (property == exynos_crtc->props.histogram_weights)
-		*val = (exynos_crtc_state->histogram_weights) ?
-			exynos_crtc_state->histogram_weights->base.id : 0;
-	else if (property == exynos_crtc->props.histogram_pos)
-		*val = exynos_crtc_state->dqe.histogram_pos;
-	else if (property == exynos_crtc->props.partial)
+	} else if (property == exynos_crtc->props.partial) {
 		*val = (exynos_crtc_state->partial) ?
 			exynos_crtc_state->partial->base.id : 0;
-	else if (property == exynos_crtc->props.cgc_lut_fd)
+	} else if (property == exynos_crtc->props.cgc_lut_fd) {
 		*val =  (exynos_crtc_state->cgc_gem) ?
 			dma_buf_fd(exynos_crtc_state->cgc_gem->dma_buf, 0) : 0;
-	else if (property == exynos_crtc->props.expected_present_time)
+	} else if (property == exynos_crtc->props.expected_present_time) {
 		*val = exynos_crtc_state->expected_present_time;
-	else if (property == exynos_crtc->props.rcd_plane_id)
+	} else if (property == exynos_crtc->props.rcd_plane_id) {
 		*val = decon->rcd->plane.base.base.id;
-	else
+	} else if (property == exynos_crtc->props.histogram_roi) {
+		*val = (exynos_crtc_state->histogram_roi) ?
+			exynos_crtc_state->histogram_roi->base.id : 0;
+	} else if (property == exynos_crtc->props.histogram_weights) {
+		*val = (exynos_crtc_state->histogram_weights) ?
+			exynos_crtc_state->histogram_weights->base.id : 0;
+	} else if (property == exynos_crtc->props.histogram_pos) {
+		*val = exynos_crtc_state->dqe.histogram_pos;
+	} else if (property == exynos_crtc->props.histogram_threshold) {
+		*val = exynos_crtc_state->dqe.histogram_threshold;
+	} else if (!strncmp(property->name, "histogram_", 10)) {
+		/*
+		 * value 0: channel is free
+		 * value 1: channel is occupied
+		 */
+		int i;
+		for (i = 0; i < HISTOGRAM_MAX; i++) {
+			if (property == exynos_crtc->props.histogram[i]) {
+				struct exynos_dqe *dqe = decon->dqe;
+				struct histogram_chan_state *hist_chan = &dqe->state.hist_chan[i];
+
+				*val = (exynos_crtc_state->histogram[i] || hist_chan->cb) ? 1 : 0;
+				return 0;
+			}
+		}
+
 		return -EINVAL;
+	} else {
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -822,7 +880,6 @@ static int exynos_drm_crtc_late_register(struct drm_crtc *crtc)
 static const struct drm_crtc_funcs exynos_crtc_funcs = {
 	.set_config		= drm_atomic_helper_set_config,
 	.page_flip		= drm_atomic_helper_page_flip,
-	.destroy		= exynos_drm_crtc_destroy,
 	.reset			= exynos_drm_crtc_reset,
 	.atomic_duplicate_state	= exynos_drm_crtc_duplicate_state,
 	.atomic_destroy_state	= exynos_drm_crtc_destroy_state,
@@ -976,13 +1033,40 @@ static int exynos_drm_crtc_histogram_pos_property(struct exynos_drm_crtc *exynos
 	return 0;
 }
 
+static int exynos_drm_crtc_histogram_channels_property(struct exynos_drm_crtc *exynos_crtc)
+{
+	struct drm_crtc *crtc = &exynos_crtc->base;
+	struct drm_property *prop;
+	static const struct drm_prop_enum_list histogram_list[] = {
+		{HISTOGRAM_0, "histogram_0"},
+#ifdef CONFIG_SOC_ZUMA
+		{HISTOGRAM_1, "histogram_1"},
+		{HISTOGRAM_2, "histogram_2"},
+		{HISTOGRAM_3, "histogram_3"},
+#endif
+	};
+	u32 bitmask = BIT(HISTOGRAM_MAX) - 1;
+
+	prop = drm_property_create_bitmask(crtc->dev, DRM_MODE_PROP_IMMUTABLE,
+					   "histogram_channels",
+					   histogram_list, ARRAY_SIZE(histogram_list), bitmask);
+	if (!prop)
+		return -ENOMEM;
+
+	drm_object_attach_property(&crtc->base, prop, HISTOGRAM_MAX);
+	exynos_crtc->props.histogram_channels = prop;
+
+	return 0;
+}
 
 static int exynos_drm_crtc_create_histogram_properties(
 			struct exynos_drm_crtc *exynos_crtc)
 {
 	struct drm_crtc *crtc = &exynos_crtc->base;
 	int ret;
+	int i;
 
+	/* legacy properties */
 	ret = exynos_drm_crtc_create_blob(crtc, "histogram_roi",
 				&exynos_crtc->props.histogram_roi);
 	if (ret)
@@ -1003,7 +1087,23 @@ static int exynos_drm_crtc_create_histogram_properties(
 	if (ret)
 		return ret;
 
-	return 0;
+	/* multi-channel support */
+	ret = exynos_drm_crtc_histogram_channels_property(exynos_crtc);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < HISTOGRAM_MAX; i++) {
+		char name[32];
+
+		snprintf(name, sizeof(name), "histogram_%d", i);
+		ret = exynos_drm_crtc_create_blob(crtc, name, &exynos_crtc->props.histogram[i]);
+		if (ret) {
+			pr_err("%s: create properties(%s): ret %d\n", __func__, name, ret);
+			return ret;
+		}
+	}
+
+	return ret;
 }
 
 static int
@@ -1051,22 +1151,19 @@ struct exynos_drm_crtc *exynos_drm_crtc_create(struct drm_device *drm_dev,
 	const struct decon_device *decon = ctx;
 	int ret;
 
-	exynos_crtc = kzalloc(sizeof(*exynos_crtc), GFP_KERNEL);
-	if (!exynos_crtc)
-		return ERR_PTR(-ENOMEM);
-
+	exynos_crtc =
+		drmm_crtc_alloc_with_planes(drm_dev, struct exynos_drm_crtc, base, plane, NULL,
+					    &exynos_crtc_funcs, "exynos-crtc-%u", decon->id);
+	if (IS_ERR(exynos_crtc)) {
+		ret = PTR_ERR(exynos_crtc);
+		goto err_crtc;
+	}
 	exynos_crtc->possible_type = type;
 	exynos_crtc->ops = ops;
 	exynos_crtc->ctx = ctx;
 	exynos_crtc->active_state = CRTC_STATE_INACTIVE;
 
 	crtc = &exynos_crtc->base;
-
-	ret = drm_crtc_init_with_planes(drm_dev, crtc, plane, NULL,
-					&exynos_crtc_funcs, "exynos-crtc-%u",
-					decon->id);
-	if (ret < 0)
-		goto err_crtc;
 
 	drm_crtc_helper_add(crtc, &exynos_crtc_helper_funcs);
 
@@ -1078,12 +1175,14 @@ struct exynos_drm_crtc *exynos_drm_crtc_create(struct drm_device *drm_dev,
 	if (ret)
 		goto err_crtc;
 
-	if (exynos_drm_crtc_create_range(crtc, "ppc", &exynos_crtc->props.ppc,
-				0, UINT_MAX))
+	ret = exynos_drm_crtc_create_range(crtc, "ppc", &exynos_crtc->props.ppc,
+			0, UINT_MAX);
+	if (ret)
 		goto err_crtc;
 
-	if (exynos_drm_crtc_create_range(crtc, "max_disp_freq",
-				&exynos_crtc->props.max_disp_freq, 0, UINT_MAX))
+	ret = exynos_drm_crtc_create_range(crtc, "max_disp_freq",
+			&exynos_crtc->props.max_disp_freq, 0, UINT_MAX);
+	if (ret)
 		goto err_crtc;
 
 	if (decon->dqe) {
@@ -1120,8 +1219,9 @@ struct exynos_drm_crtc *exynos_drm_crtc_create(struct drm_device *drm_dev,
 			goto err_crtc;
 
 		if (decon->cgc_dma) {
-			if (exynos_drm_crtc_create_signed_range(crtc, "cgc_lut_fd",
-						&exynos_crtc->props.cgc_lut_fd, INT_MIN, INT_MAX))
+			ret = exynos_drm_crtc_create_signed_range(crtc, "cgc_lut_fd",
+					&exynos_crtc->props.cgc_lut_fd, INT_MIN, INT_MAX);
+			if (ret)
 				goto err_crtc;
 		} else {
 			ret = exynos_drm_crtc_create_blob(crtc, "cgc_lut",
@@ -1149,7 +1249,6 @@ struct exynos_drm_crtc *exynos_drm_crtc_create(struct drm_device *drm_dev,
 	return exynos_crtc;
 
 err_crtc:
-	kfree(exynos_crtc);
 	return ERR_PTR(ret);
 }
 
@@ -1201,9 +1300,18 @@ bool exynos_crtc_needs_disable(struct drm_crtc_state *old_state,
 		return drm_atomic_crtc_effectively_active(old_state);
 
 	/*
-	 * We need to run through the crtc_funcs->disable() function if the CRTC
-	 * is currently on, if it's transitioning to self refresh mode, or if
-	 * it's in self refresh mode and needs to be fully disabled.
+	 * We need to disable bridge(s) and CRTC if we're transitioning out of
+	 * self-refresh and changing CRTCs at the same time, because the
+	 * bridge tracks self-refresh status via CRTC state.
+	 */
+	if (old_state->self_refresh_active && old_state->crtc != new_state->crtc)
+		return true;
+
+	/*
+	 * We also need to run through the crtc_funcs->disable() function if
+	 * the CRTC is currently on, if it's transitioning to self refresh
+	 * mode, or if it's in self refresh mode and needs to be fully
+	 * disabled.
 	 */
 	return old_state->active ||
 			(old_state->self_refresh_active && !new_state->enable) ||

@@ -30,6 +30,7 @@
 
 #include "exynos_drm_connector.h"
 #include "exynos_drm_dqe.h"
+#include "cal_common/dqe_cal.h"
 
 #define MAX_CRTC	3
 #define MAX_PLANE	MAX_WIN_PER_DECON
@@ -85,12 +86,21 @@ struct exynos_drm_rect {
 	unsigned int w, h;
 };
 
+#if defined(CONFIG_SOC_ZUMA)
+struct exynos_hdr_state {
+	struct hdr_eotf_lut_v2p2 *eotf_lut;
+	struct hdr_oetf_lut_v2p2 *oetf_lut;
+	struct hdr_gm_data *gm;
+	struct hdr_tm_data_v2p2 *tm;
+};
+#else
 struct exynos_hdr_state {
 	struct hdr_eotf_lut *eotf_lut;
 	struct hdr_oetf_lut *oetf_lut;
 	struct hdr_gm_data *gm;
 	struct hdr_tm_data *tm;
 };
+#endif
 
 /*
  * Exynos drm plane state structure.
@@ -185,6 +195,7 @@ struct exynos_drm_plane_config {
 	const uint32_t *pixel_formats;
 	unsigned int num_pixel_formats;
 	unsigned int capabilities;
+	const uint64_t *format_modifiers;
 };
 
 /*
@@ -221,7 +232,7 @@ struct exynos_drm_crtc_ops {
 		const struct drm_display_mode *adjusted_mode);
 	int (*atomic_check)(struct exynos_drm_crtc *crtc,
 			    struct drm_crtc_state *state);
-	void (*atomic_begin)(struct exynos_drm_crtc *crtc);
+	void (*atomic_begin)(struct exynos_drm_crtc *crtc, struct drm_atomic_state *state);
 	void (*update_plane)(struct exynos_drm_crtc *crtc,
 			     struct exynos_drm_plane *plane);
 	void (*disable_plane)(struct exynos_drm_crtc *crtc,
@@ -246,8 +257,12 @@ struct exynos_drm_crtc_state {
 	struct drm_property_blob *cgc_dither;
 	struct drm_property_blob *linear_matrix;
 	struct drm_property_blob *gamma_matrix;
+	/* legacy histogram properties */
 	struct drm_property_blob *histogram_roi;
 	struct drm_property_blob *histogram_weights;
+	/* multi-channel support */
+	struct drm_property_blob *histogram[HISTOGRAM_MAX];
+
 	struct drm_gem_object *cgc_gem;
 	enum exynos_drm_writeback_type wb_type;
 	u8 seamless_mode_changed : 1;
@@ -316,14 +331,18 @@ struct exynos_drm_crtc {
 		struct drm_property *linear_matrix;
 		struct drm_property *gamma_matrix;
 		struct drm_property *dqe_enabled;
-		struct drm_property *histogram_roi;
-		struct drm_property *histogram_weights;
-		struct drm_property *histogram_threshold;
-		struct drm_property *histogram_pos;
 		struct drm_property *partial;
 		struct drm_property *cgc_lut_fd;
 		struct drm_property *expected_present_time;
 		struct drm_property *rcd_plane_id;
+		/* legacy histogram properties */
+		struct drm_property *histogram_roi;
+		struct drm_property *histogram_weights;
+		struct drm_property *histogram_threshold;
+		struct drm_property *histogram_pos;
+		/* multichannel support */
+		struct drm_property *histogram_channels;
+		struct drm_property *histogram[HISTOGRAM_MAX];
 	} props;
 	u8 active_state;
 	u32 rcd_plane_mask;
@@ -333,9 +352,19 @@ struct drm_exynos_file_private {
 	u32 dummy;
 };
 
+struct histogram_event_node {
+	struct drm_pending_event *base;
+	struct list_head node;
+};
+
 struct exynos_drm_pending_histogram_event {
 	struct drm_pending_event base;
-	struct exynos_drm_histogram_event event;
+	struct exynos_drm_histogram_channel_event event;
+};
+
+struct exynos_drm_pending_context_histogram_event {
+	struct drm_pending_event base;
+	struct exynos_drm_context_histogram_event event;
 };
 
 struct exynos_drm_priv_state {
@@ -368,6 +397,7 @@ struct exynos_drm_private {
 	struct device *iommu_client;
 	void *mapping;
 	bool tui_enabled;
+	struct mutex dp_tui_lock;
 	u32 secured_dpp_mask;
 
 	/* for atomic commit */
@@ -404,6 +434,22 @@ int exynos_atomic_commit(struct drm_device *dev, struct drm_atomic_state *state,
 int exynos_atomic_check(struct drm_device *dev, struct drm_atomic_state *state);
 int exynos_atomic_enter_tui(void);
 int exynos_atomic_exit_tui(void);
+
+enum lhbm_hist_weight_grp { LHBM_CIRCLE_WEIGHT = 0, LHBM_FSCREEN_WEIGHT, LHBM_WEIGHT_MAX };
+
+static struct histogram_weights lhbm_hist_weight[LHBM_WEIGHT_MAX] = { { 341, 341, 341 },
+								      { 218, 732, 74 } };
+
+int exynos_drm_drv_set_lhbm_hist(struct exynos_drm_connector *conn, int x, int y, int w, int h);
+/**
+ * exynos_drm_drv_set_lhbm_hist_gs() - sets decon lhbm hist ROI
+ * @decon: decon device whose ROI is changing
+ * @roi: histogram ROI
+ * @weight: histogram weight
+ */
+int exynos_drm_drv_set_lhbm_hist_gs(struct decon_device *decon, struct histogram_roi *roi,
+				    struct histogram_weights *weight);
+int exynos_drm_drv_get_lhbm_gray_level(struct exynos_drm_connector *conn);
 
 extern struct platform_driver decon_driver;
 extern struct platform_driver dsim_driver;

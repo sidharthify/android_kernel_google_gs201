@@ -81,14 +81,19 @@ struct exynos_dsc {
 	u32 slice_width;
 	u32 slice_height;
 	const struct drm_dsc_config *cfg;
-
-	unsigned int delay_reg_init_us;
 };
 
 /* return compressed DSC slice width */
 static inline u32 get_comp_dsc_width(const struct exynos_dsc *dsc)
 {
 	return ALIGN(DIV_ROUND_UP(dsc->slice_width, 3), 4);
+}
+
+static inline u32 decon_get_comp_dsc_width(u32 slice_width, u32 bpc)
+{
+	unsigned int slice_width_pixels = DIV_ROUND_UP(slice_width * bpc, 8);
+
+	return DIV_ROUND_UP(slice_width_pixels, 6) * 2;
 }
 
 #endif /* __EXYNOS_PANEL_H__ */

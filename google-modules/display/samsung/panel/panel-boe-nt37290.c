@@ -446,11 +446,6 @@ static const struct exynos_dsi_cmd nt37290_init_cmds[] = {
 	EXYNOS_DSI_CMD_SEQ(0x6F, 0x1C),
 	EXYNOS_DSI_CMD_SEQ(0xF8, 0x3A),
 
-    /* CMD2 Page 4 */
-    /* b/345736052: Extend DBI Flash Data Update Cycle time */
-    EXYNOS_DSI_CMD_SEQ(0xF0, 0x55, 0xAA, 0x52, 0x08, 0x04),
-    EXYNOS_DSI_CMD_SEQ(0xBB, 0xB3, 0x04, 0x19),
-
 	EXYNOS_DSI_CMD_SEQ_DELAY(120, 0x11),
 };
 static DEFINE_EXYNOS_CMD_SET(nt37290_init);
@@ -688,7 +683,7 @@ static bool nt37290_update_panel_feat(struct exynos_panel *ctx,
 					   (spanel->hw_osc2_clk_idx == 1) ? 0x21 : 0x20);
 		}
 
-		/* VRR gamma band (60~10Hz) */
+		/* RR gamma band (60~10Hz) */
 		if (ctx->panel_rev == PANEL_REV_EVT1_1)
 			EXYNOS_DCS_BUF_ADD(ctx, 0x26, 0x01);
 
@@ -736,7 +731,6 @@ static bool nt37290_change_frequency(struct exynos_panel *ctx,
 
 	if (updated) {
 		notify_panel_mode_changed(ctx, false);
-		te2_state_changed(ctx->bl);
 		dev_dbg(ctx->dev, "change to %dHz, idle %s, was_lp_mode %d\n",
 			vrefresh, idle_active ? "active" : "deactive", was_lp_mode);
 	}
@@ -773,12 +767,8 @@ static bool nt37290_set_self_refresh(struct exynos_panel *ctx, bool enable)
 		return false;
 
 	/* self refresh is not supported in lp mode since that always makes use of early exit */
-	if (pmode->exynos_mode.is_lp_mode) {
-		/* set 10Hz while self refresh is active, otherwise clear it */
-		ctx->panel_idle_vrefresh = enable ? 10 : 0;
-		notify_panel_mode_changed(ctx, true);
+	if (pmode->exynos_mode.is_lp_mode)
 		return false;
-	}
 
 	/* do not change frequency when LHBM is enabled */
 	if (ctx->hbm.local_hbm.enabled) {
@@ -809,11 +799,16 @@ static bool nt37290_set_self_refresh(struct exynos_panel *ctx, bool enable)
 }
 
 /**
+ * EARLY_EXIT_THRESHOLD_US
+ *
  * 120hz auto mode takes at least 2 frames to start lowering refresh rate in addition to
  * time to next vblank. Use just over 2 frames time to consider worst case scenario
  */
 #define EARLY_EXIT_THRESHOLD_US 17000
+
 /**
+ * IDLE_DELAY_THRESHOLD_US
+ *
  * Use a threshold to avoid disabling idle auto mode too frequently while continuously
  * updating frames. Considering the hibernation time for this scenario.
  */
@@ -866,7 +861,7 @@ static void nt37290_commit_done(struct exynos_panel *ctx)
 	const struct exynos_panel_mode *pmode = ctx->current_mode;
 	bool updated = false;
 
-	if (!is_panel_active(ctx) || !pmode)
+	if (!is_panel_active(ctx) || pmode->exynos_mode.is_lp_mode)
 		return;
 
 	if (spanel->rrs_in_progress) {
@@ -1009,9 +1004,9 @@ static int nt37290_enable(struct drm_panel *panel)
 	exynos_panel_send_cmd_set(ctx,
 				  is_fhd ? &nt37290_dsc_fhd_cmd_set : &nt37290_dsc_wqhd_cmd_set);
 
-	if (pmode->exynos_mode.is_lp_mode) {
+	if (pmode->exynos_mode.is_lp_mode)
 		nt37290_set_lp_mode(ctx, pmode);
-	} else {
+	else {
 		if (!needs_reset)
 			nt37290_change_frequency(ctx, pmode);
 
@@ -1110,7 +1105,9 @@ static const struct brightness_data evt1_1_normal_band_data[] = {
 	{ .nits = 2, .level = 3 },      /* band 8 */
 };
 
-/**
+/*
+ * struct brightness_data dvt1_range_data
+ *
  * All coefficients are multiplied by 10^6 to have sufficient accuracy.
  * For example, the original equation of range 0 is:
  *
@@ -1630,7 +1627,6 @@ static const struct drm_dsc_config nt37290_dsc_cfg = {
 
 static const struct exynos_panel_mode nt37290_modes[] = {
 	{
-		/* 1440x3120 @ 60Hz */
 		.mode = {
 			.name = "1440x3120x60",
 			.clock = 298620,
@@ -1660,7 +1656,6 @@ static const struct exynos_panel_mode nt37290_modes[] = {
 		.idle_mode = IDLE_MODE_ON_SELF_REFRESH,
 	},
 	{
-		/* 1440x3120 @ 120Hz */
 		.mode = {
 			.name = "1440x3120x120",
 			.clock = 597240,
@@ -1690,7 +1685,6 @@ static const struct exynos_panel_mode nt37290_modes[] = {
 		.idle_mode = IDLE_MODE_ON_INACTIVITY,
 	},
 	{
-		/* 1080x2340 @ 60Hz */
 		.mode = {
 			.name = "1080x2340x60",
 			.clock = 173484,
@@ -1720,7 +1714,6 @@ static const struct exynos_panel_mode nt37290_modes[] = {
 		.idle_mode = IDLE_MODE_ON_SELF_REFRESH,
 	},
 	{
-		/* 1080x2340 @ 120Hz */
 		.mode = {
 			.name = "1080x2340x120",
 			.clock = 346968,
@@ -1754,7 +1747,6 @@ static const struct exynos_panel_mode nt37290_modes[] = {
 static const struct exynos_panel_mode nt37290_lp_modes[] = {
 	{
 		.mode = {
-			/* 1440x3120 @ 30Hz */
 			.name = "1440x3120x30",
 			.clock = 149310,
 			.hdisplay = 1440,
@@ -1780,7 +1772,6 @@ static const struct exynos_panel_mode nt37290_lp_modes[] = {
 	},
 	{
 		.mode = {
-			/* 1080x2340 @ 30Hz */
 			.name = "1080x2340x30",
 			.clock = 86742,
 			.hdisplay = 1080,

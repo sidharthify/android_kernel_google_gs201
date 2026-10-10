@@ -17,7 +17,6 @@
 
 #include <decon_cal.h>
 #include <dqe_cal.h>
-#include <trace/dpu_trace.h>
 #ifdef __linux__
 #include "../exynos_drm_decon.h"
 #include <linux/of_address.h>
@@ -25,7 +24,6 @@
 
 #include "regs-decon.h"
 #include "regs-dqe.h"
-#include "../cal_9855/decon_cal_internal.h"
 
 enum decon_dsc_id {
 	DECON_DSC_ENC0 = 0x0,
@@ -92,7 +90,7 @@ static void decon_reg_set_operation_mode(u32 id, enum decon_op_mode mode)
 	decon_write_mask(id, GLOBAL_CON, val, mask);
 }
 
-static void decon_reg_direct_on_off(u32 id, u32 en)
+void decon_reg_direct_on_off(u32 id, u32 en)
 {
 	u32 val, mask;
 
@@ -423,7 +421,7 @@ static void decon_reg_set_data_path(u32 id, struct decon_config *cfg)
 			COMP_OUTIF_PATH_MASK);
 }
 
-void decon_reg_set_cwb_enable(u32 id, u32 en)
+void decon_reg_set_cwb_enable(u32 id, bool en)
 {
 	u32 val, mask, d_path;
 
@@ -448,11 +446,6 @@ void decon_reg_set_dqe_enable(u32 id, bool en)
 	decon_write_mask(id, DATA_PATH_CON_0, val, mask);
 }
 
-
-void decon_reg_set_rcd_enable(u32 dqe_id, bool en)
-{
-	decon_reg_set_rcd_enable_internal(dqe_id, en);
-}
 /*
  * Check major configuration of data_path_control
  *    DSCC[7]
@@ -653,6 +646,7 @@ static void decon_reg_set_ewr_control(u32 id, u32 cnt, u32 en)
 	decon_reg_set_ewr_enable(id, en);
 }
 #endif
+
 static void decon_reg_update_req_compress(u32 id)
 {
 	decon_write_mask(id, SHD_REG_UP_REQ, ~0, SHD_REG_UP_REQ_CMP);
@@ -1382,13 +1376,11 @@ static void dsc_reg_set_encoder(u32 id, struct decon_config *config,
 	}
 }
 
-int decon_dsc_reg_init(u32 id, struct decon_config *config, u32 overlap_w,
+static int dsc_reg_init(u32 id, struct decon_config *config, u32 overlap_w,
 		u32 swrst)
 {
 	u32 dsc_id;
 	struct decon_dsc dsc_enc;
-
-	DPU_ATRACE_BEGIN(__func__);
 
 	/* Basically, all SW-resets in DPU are not necessary */
 	if (swrst) {
@@ -1401,8 +1393,6 @@ int decon_dsc_reg_init(u32 id, struct decon_config *config, u32 overlap_w,
 	decon_reg_config_data_path_size(id, dsc_enc.width_per_enc,
 			config->image_height, overlap_w, &dsc_enc,
 			&config->dsc, config->mode.dsi_mode);
-
-	DPU_ATRACE_END(__func__);
 
 	return 0;
 }
@@ -1438,9 +1428,8 @@ static void decon_reg_configure_lcd(u32 id, struct decon_config *config)
 	decon_reg_set_data_path(id, config);
 
 	if (config->dsc.enabled) {
-		if (!config->dsc.delay_reg_init_us)
-			/* call decon_reg_config_data_path_size () inside */
-			decon_dsc_reg_init(id, config, overlap_w, 0);
+		/* call decon_reg_config_data_path_size () inside */
+		dsc_reg_init(id, config, overlap_w, 0);
 	} else {
 		decon_reg_config_data_path_size(id, config->image_width,
 				config->image_height, overlap_w, NULL,
@@ -1499,13 +1488,11 @@ static int decon_reg_stop_perframe_dsi(u32 id, struct decon_config *config,
 	return ret;
 }
 
-#if defined(CONFIG_EXYNOS_DISPLAYPORT)
 static int decon_reg_stop_perframe_dp(u32 id, u32 fps)
 {
 	int ret = 0;
 	/* timeout_us : 1000000us / fps + 50% margin */
 	const int timeout_us = DIV_ROUND_UP(USEC_PER_SEC * 15, fps * 10);
-	u32 sst_id = SST1;
 
 	cal_log_debug(id, "%s +\n", __func__);
 
@@ -1515,15 +1502,9 @@ static int decon_reg_stop_perframe_dp(u32 id, u32 fps)
 
 	ret = decon_reg_wait_run_is_off_timeout(id, timeout_us);
 
-	sst_id = displayport_get_sst_id_with_decon_id(id);
-	displayport_reg_lh_p_ch_power(sst_id, 0);
-
 	cal_log_debug(id, "%s -\n", __func__);
 	return ret;
 }
-#else
-static inline int decon_reg_stop_perframe_dp(u32 id, u32 fps) { return 0; }
-#endif
 
 static int decon_reg_stop_inst_dsi(u32 id, struct decon_config *config, u32 fps)
 {
@@ -1546,12 +1527,10 @@ static int decon_reg_stop_inst_dsi(u32 id, struct decon_config *config, u32 fps)
 	return ret;
 }
 
-#if defined(CONFIG_EXYNOS_DISPLAYPORT)
 static int decon_reg_stop_inst_dp(u32 id, u32 fps)
 {
 	int ret = 0;
 	const int timeout_us = DIV_ROUND_UP(USEC_PER_SEC * 15, fps * 10);
-	u32 sst_id = SST1;
 
 	cal_log_debug(id, "%s +\n", __func__);
 
@@ -1559,20 +1538,11 @@ static int decon_reg_stop_inst_dp(u32 id, u32 fps)
 	decon_reg_direct_on_off(id, 0);
 	decon_reg_update_req_global(id);
 
-	sst_id = displayport_get_sst_id_with_decon_id(id);
-	displayport_reg_lh_p_ch_power(sst_id, 0);
-
 	ret = decon_reg_wait_run_is_off_timeout(id, timeout_us);
 
 	cal_log_debug(id, "%s -\n", __func__);
 	return ret;
 }
-#else
-static inline int decon_reg_stop_inst_dp(u32 id, u32 fps)
-{
-	return 0;
-}
-#endif
 
 void decon_reg_set_win_enable(u32 id, u32 win_idx, u32 en)
 {
@@ -1810,22 +1780,19 @@ static void decon_reg_set_dither_path(u32 id, bool en)
 
 static void decon_reg_set_urgent(u32 id, struct decon_config *config)
 {
-	// Only set urgent for DECON0 now
-	if (id == 0) {
-		decon_reg_set_rd_urgent_enable(id, config->urgent.rd_en);
-		decon_reg_set_rd_urgent_threshold(id,
-						  config->urgent.rd_hi_thres,
-						  config->urgent.rd_lo_thres);
-		decon_reg_set_rd_wait_cycle(id, config->urgent.rd_wait_cycle);
-		decon_reg_set_wr_urgent_enable(id, config->urgent.wr_en);
-		decon_reg_set_wr_urgent_threshold(id,
-						  config->urgent.wr_hi_thres,
-						  config->urgent.wr_lo_thres);
-		decon_reg_set_dta_enable(id, config->urgent.dta_en);
-		decon_reg_set_dta_threshold(id,
-					    config->urgent.dta_hi_thres,
-					    config->urgent.dta_lo_thres);
-	}
+	decon_reg_set_rd_urgent_enable(id, config->urgent.rd_en);
+	decon_reg_set_rd_urgent_threshold(id,
+					  config->urgent.rd_hi_thres,
+					  config->urgent.rd_lo_thres);
+	decon_reg_set_rd_wait_cycle(id, config->urgent.rd_wait_cycle);
+	decon_reg_set_wr_urgent_enable(id, config->urgent.wr_en);
+	decon_reg_set_wr_urgent_threshold(id,
+					  config->urgent.wr_hi_thres,
+					  config->urgent.wr_lo_thres);
+	decon_reg_set_dta_enable(id, config->urgent.dta_en);
+	decon_reg_set_dta_threshold(id,
+				    config->urgent.dta_hi_thres,
+				    config->urgent.dta_lo_thres);
 }
 
 /******************** EXPORTED DECON CAL APIs ********************/
@@ -1905,17 +1872,11 @@ int decon_reg_init(u32 id, struct decon_config *config)
 int decon_reg_start(u32 id, struct decon_config *config)
 {
 	int ret = 0;
-#if defined(CONFIG_EXYNOS_DISPLAYPORT)
-	u32 sst_id = SST1;
 
-	if (config->out_type & DECON_OUT_DP) {
-		sst_id = displayport_get_sst_id_with_decon_id(id);
-		displayport_reg_lh_p_ch_power(sst_id, 1);
+	if (config->mode.op_mode == DECON_COMMAND_MODE) {
+		decon_reg_direct_on_off(id, 1);
+		decon_reg_update_req_global(id);
 	}
-#endif
-
-	decon_reg_direct_on_off(id, 1);
-	decon_reg_update_req_global(id);
 
 	/* clear pending frame start if any to ensure next frame start reflects new update */
 	decon_reg_clear_int(id, INT_EN_FRAME_START);
@@ -1965,7 +1926,7 @@ int decon_reg_stop(u32 id, struct decon_config *config, bool rst, u32 fps)
 	} else if (config->out_type & DECON_OUT_DP) {
 		ret = decon_reg_stop_perframe_dp(id, fps);
 		if (ret < 0) {
-			cal_log_err(id, "failed to perframe_stop\n");
+			cal_log_err(id, "failed to perframe_stop(DP)\n");
 			/* if fails, call decon instant off */
 			ret = decon_reg_stop_inst_dp(id, fps);
 			if (ret < 0)
@@ -2017,6 +1978,21 @@ void decon_reg_all_win_shadow_update_req(u32 id)
 	decon_write_mask(id, SHD_REG_UP_REQ, ~0, mask);
 }
 
+#if defined(CONFIG_SOC_GS101)
+void decon_video_mode_reg_update_req_internal(u32 id, bool dqe_need_update)
+{
+	u32 mask;
+
+	mask = SHD_REG_UP_REQ_FOR_DECON | SHD_REG_UP_REQ_GLOBAL;
+	if (id != 2)
+		mask |= SHD_REG_UP_REQ_CMP;
+	if (dqe_need_update)
+		mask |= SHD_REG_UP_REQ_DQE;
+
+	decon_write_mask(id, SHD_REG_UP_REQ, ~0, mask);
+}
+#endif
+
 void decon_reg_set_window_control(u32 id, int win_idx,
 		struct decon_window_regs *regs, u32 winmap_en)
 {
@@ -2048,11 +2024,6 @@ void decon_reg_update_req_window(u32 id, u32 win_idx)
 
 	mask = SHD_REG_UP_REQ_WIN(win_idx);
 	decon_write_mask(id, SHD_REG_UP_REQ, ~0, mask);
-}
-
-void decon_reg_update_req_cgc(u32 id)
-{
-	decon_reg_update_req_cgc_internal(id);
 }
 
 void decon_reg_update_req_dqe(u32 id)
@@ -2184,7 +2155,7 @@ void decon_reg_set_mres(u32 id, struct decon_config *config)
 			config->image_width, config->image_height);
 
 	if (config->dsc.enabled)
-		decon_dsc_reg_init(id, config, overlap_w, 0);
+		dsc_reg_init(id, config, overlap_w, 0);
 	else
 		decon_reg_config_data_path_size(id, config->image_width,
 				config->image_height, overlap_w, NULL,
@@ -2484,4 +2455,9 @@ bool is_decon_using_win(u32 id, u64 rsc_win, u32 win)
 void decon_reg_set_drm_write_protected(u32 id, bool protected)
 {
 	cal_set_write_protected(sub_regs_desc(id), protected);
+}
+
+void decon_reg_update_req_cgc(u32 id)
+{
+	decon_reg_update_req_cgc_internal(id);
 }

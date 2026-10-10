@@ -20,6 +20,7 @@
 #include <dqe_cal.h>
 #include <decon_cal.h>
 #include <regs-dqe.h>
+#include <trace/dpu_trace.h>
 
 #include "exynos_drm_decon.h"
 
@@ -28,8 +29,7 @@ static inline u8 get_actual_dstep(u8 dstep, int vrefresh)
 	return dstep * vrefresh / 60;
 }
 
-static void
-exynos_atc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
+void exynos_atc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 {
 	const struct exynos_drm_crtc_state *exynos_crtc_state =
 		container_of(state, struct exynos_drm_crtc_state, dqe);
@@ -37,6 +37,8 @@ exynos_atc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 	struct decon_device *decon = dqe->decon;
 	struct drm_printer p = drm_info_printer(decon->dev);
 	u32 id = decon->id;
+
+	DPU_ATRACE_BEGIN(__func__);
 
 	if (drm_atomic_crtc_needs_modeset(crtc_state) || dqe->dstep_changed ||
 			exynos_crtc_state->seamless_mode_changed) {
@@ -53,6 +55,8 @@ exynos_atc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 			drm_mode_vrefresh(&crtc_state->mode),
 			dqe->force_atc_config.dstep,
 			dqe->force_atc_config.actual_dstep);
+	if (decon->thread)
+		DPU_ATRACE_INT_PID("atc_en", dqe->force_atc_config.en, decon->thread->pid);
 
 	if (dqe->force_atc_config.dirty) {
 		if (dqe->force_atc_config.en) {
@@ -65,54 +69,88 @@ exynos_atc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 
 	if (dqe->verbose_atc)
 		dqe_reg_print_atc(id, &p);
+
+	DPU_ATRACE_END(__func__);
 }
+EXPORT_SYMBOL_GPL(exynos_atc_update);
 
 /*
- * emmits event (called should protect)
+ * emmits event (caller should protect)
  */
-static void histogram_emmit_event(struct exynos_dqe *dqe)
+static void histogram_emmit_event_locked(struct exynos_dqe *dqe,
+					 struct histogram_event_node *e_node)
 {
 	struct drm_device *dev = dqe->decon->drm_dev;
-	struct exynos_drm_pending_histogram_event *e = dqe->state.event;
-	uint32_t crtc_id = dqe->decon->crtc->base.base.id;
 
-	e->event.crtc_id = crtc_id;
-	drm_send_event(dev, &e->base);
-	dqe->state.event = NULL;
+	DPU_ATRACE_BEGIN(__func__);
+	list_del(&e_node->node);
+	drm_send_event(dev, e_node->base);
+	kfree(e_node);
+	DPU_ATRACE_END(__func__);
 }
 
-static void histogram_collect_bins(struct exynos_dqe *dqe, struct histogram_bins *bins)
+static void histogram_chan_collect_bins_locked(struct exynos_dqe *dqe,
+					       enum exynos_histogram_id hist_id,
+					       struct histogram_bins *bins)
 {
-	uint32_t id = dqe->decon->id;
+	DPU_ATRACE_BEGIN(__func__);
 	/* collect data from bins */
-	dqe_reg_get_histogram_bins(id, bins);
+	DPU_EVENT_LOG(DPU_EVT_HIST_COLLECT_BINS, dqe->decon->id, &hist_id);
+	dqe_reg_get_histogram_bins(dqe->dev, dqe->decon->id, hist_id, bins);
+	DPU_ATRACE_END(__func__);
 }
 
 static const char *str_run_state(enum histogram_run_state state)
 {
 	switch (state) {
-		case HSTATE_DISABLED:
-			return "disabled";
-		case HSTATE_HIBERNATION:
-			return "hibernation";
-		case HSTATE_PENDING_FRAMEDONE:
-			return "pending_framedone";
-		case HSTATE_IDLE:
-			return "idle";
-		default:
-			return "";
+	case HSTATE_DISABLED:
+		return "disabled";
+	case HSTATE_HIBERNATION:
+		return "hibernation";
+	case HSTATE_PENDING_FRAMEDONE:
+		return "pending_framedone";
+	case HSTATE_IDLE:
+		return "idle";
+	default:
+		return "";
 	}
 }
 
-static void histogram_set_run_state(struct exynos_dqe *dqe, enum histogram_run_state state)
+static void histogram_chan_set_run_state_locked(struct exynos_dqe *dqe,
+						enum exynos_histogram_id hist_id,
+						enum histogram_run_state state)
 {
 	pr_debug("histogram: run_state: %s -> %s\n",
-		 str_run_state(dqe->state.hist_run_state), str_run_state(state));
-	dqe->state.hist_run_state = state;
+		 str_run_state(dqe->state.hist_chan[hist_id].run_state), str_run_state(state));
+	dqe->state.hist_chan[hist_id].run_state = state;
 }
 
-static struct exynos_drm_pending_histogram_event *create_histogram_event(
-		struct drm_device *dev, struct drm_file *file)
+static struct histogram_event_node *create_histogram_event_node(struct drm_pending_event *pending_e)
+{
+	struct histogram_event_node *e_node = NULL;
+
+	e_node = kzalloc(sizeof(*e_node), GFP_KERNEL);
+	if (!e_node)
+		return ERR_PTR(-ENOMEM);
+
+	e_node->base = pending_e;
+	INIT_LIST_HEAD(&e_node->node);
+	return e_node;
+}
+
+static void release_histogram_event_node(struct drm_device *dev,
+					 struct histogram_event_node *e_node)
+{
+	list_del(&e_node->node);
+	if (e_node->base)
+		drm_event_cancel_free(dev, e_node->base);
+	kfree(e_node);
+}
+
+static struct exynos_drm_pending_histogram_event *create_histogram_event(struct drm_device *dev,
+									 struct drm_file *file,
+									 uint32_t crtc_id,
+									 uint32_t hist_id)
 {
 	struct exynos_drm_pending_histogram_event *e = NULL;
 	int ret;
@@ -121,11 +159,14 @@ static struct exynos_drm_pending_histogram_event *create_histogram_event(
 	if (!e)
 		return ERR_PTR(-ENOMEM);
 
-	e->event.base.type = EXYNOS_DRM_HISTOGRAM_EVENT;
+	e->event.base.type = EXYNOS_DRM_HISTOGRAM_CHANNEL_EVENT;
 	e->event.base.length = sizeof(e->event);
+	e->event.crtc_id = crtc_id;
+	e->event.hist_id = hist_id;
 
 	ret = drm_event_reserve_init(dev, file, &e->base, &e->event.base);
 	if (ret) {
+		pr_err("drm_event_reserve_init failed, ret(%d)\n", ret);
 		kfree(e);
 		return ERR_PTR(ret);
 	}
@@ -133,16 +174,91 @@ static struct exynos_drm_pending_histogram_event *create_histogram_event(
 	return e;
 }
 
-int histogram_request_ioctl(struct drm_device *dev, void *data,
-				struct drm_file *file)
+static struct exynos_drm_pending_context_histogram_event *
+create_context_histogram_event(struct drm_device *dev, struct drm_file *file, uint32_t crtc_id,
+			       uint32_t user_handle)
+{
+	struct exynos_drm_pending_context_histogram_event *e = NULL;
+	int ret;
+
+	e = kzalloc(sizeof(*e), GFP_KERNEL);
+	if (!e)
+		return ERR_PTR(-ENOMEM);
+
+	e->event.base.type = EXYNOS_DRM_CONTEXT_HISTOGRAM_EVENT;
+	e->event.base.length = sizeof(e->event);
+	e->event.crtc_id = crtc_id;
+	e->event.user_handle = user_handle;
+
+	ret = drm_event_reserve_init(dev, file, &e->base, &e->event.base);
+	if (ret) {
+		pr_err("drm_event_reserve_init failed, ret(%d)\n", ret);
+		kfree(e);
+		return ERR_PTR(ret);
+	}
+
+	return e;
+}
+
+/* histogram_find_event_node_locked is called with histogram_slock held */
+static struct histogram_event_node *
+histogram_find_event_node_locked(struct list_head *hist_pending_events_list,
+				 enum exynos_histogram_id hist_id, uint32_t user_handle)
+{
+	struct histogram_event_node *e_node;
+	struct exynos_drm_pending_histogram_event *chan_e;
+	struct exynos_drm_pending_context_histogram_event *context_e;
+
+	list_for_each_entry (e_node, hist_pending_events_list, node) {
+		if (e_node->base->event->type == EXYNOS_DRM_HISTOGRAM_CHANNEL_EVENT) {
+			chan_e = container_of(e_node->base,
+					      struct exynos_drm_pending_histogram_event, base);
+			if (chan_e->event.hist_id == hist_id && hist_id < HISTOGRAM_MAX)
+				return e_node;
+		} else if (e_node->base->event->type == EXYNOS_DRM_CONTEXT_HISTOGRAM_EVENT) {
+			context_e = container_of(e_node->base,
+						 struct exynos_drm_pending_context_histogram_event,
+						 base);
+			if (context_e->event.user_handle == user_handle && user_handle != 0)
+				return e_node;
+		}
+	}
+
+	return NULL;
+}
+
+int histogram_request_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	pr_err("%s: ignored\n", __func__);
+	return 0;
+}
+
+int histogram_cancel_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	pr_err("%s: ignored\n", __func__);
+	return 0;
+}
+
+static int histogram_channel_ioctl_process_arg(struct drm_device *dev, void *data,
+					       struct drm_file *file, uint32_t *crtc_id,
+					       enum exynos_histogram_id *hist_id,
+					       struct decon_device **decon, struct exynos_dqe **dqe)
 {
 	struct drm_mode_object *obj;
 	struct exynos_drm_crtc *exynos_crtc;
-	struct decon_device *decon;
-	struct exynos_dqe *dqe;
-	uint32_t *crtc_id = data;
-	struct exynos_drm_pending_histogram_event *e;
-	unsigned long flags;
+	struct exynos_drm_histogram_channel_request *request = data;
+
+	if (!data) {
+		pr_err("invalid histogram request, data is NULL\n");
+		return -EINVAL;
+	}
+
+	*crtc_id = request->crtc_id;
+	*hist_id = request->hist_id;
+	if (*hist_id >= HISTOGRAM_MAX) {
+		pr_err("invalid histogram channel id(%d)\n", *hist_id);
+		return -EINVAL;
+	}
 
 	obj = drm_mode_object_find(dev, file, *crtc_id, DRM_MODE_OBJECT_CRTC);
 	if (!obj) {
@@ -153,17 +269,47 @@ int histogram_request_ioctl(struct drm_device *dev, void *data,
 	exynos_crtc = to_exynos_crtc(obj_to_crtc(obj));
 	drm_mode_object_put(obj);
 
-	decon = exynos_crtc->ctx;
-	dqe = decon->dqe;
-	if (!dqe) {
-		pr_err("failed to get dqe from decon%u\n", decon->id);
+	*decon = exynos_crtc->ctx;
+	*dqe = (*decon)->dqe;
+	if (!*dqe) {
+		pr_err("failed to get dqe from decon%u\n", (*decon)->id);
 		return -ENODEV;
 	}
 
-	e = create_histogram_event(dev, file);
+	return 0;
+}
+
+int histogram_channel_request_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct decon_device *decon;
+	struct exynos_dqe *dqe;
+	unsigned long flags;
+	struct histogram_event_node *e_node;
+	struct exynos_drm_pending_histogram_event *e;
+	enum exynos_histogram_id hist_id;
+	struct histogram_chan_state *hist_chan;
+	uint32_t crtc_id;
+	int ret;
+
+	/* validate the histogram ioctl argument */
+	ret = histogram_channel_ioctl_process_arg(dev, data, file, &crtc_id, &hist_id, &decon,
+						  &dqe);
+	if (ret) {
+		pr_err("histogram_channel_ioctl_process_arg failed, ret(%d)\n", ret);
+		return ret;
+	}
+
+	e = create_histogram_event(dev, file, crtc_id, hist_id);
 	if (IS_ERR(e)) {
 		pr_err("failed to create a histogram event\n");
 		return PTR_ERR(e);
+	}
+
+	e_node = create_histogram_event_node(&e->base);
+	if (!e_node) {
+		pr_err("failed to allocate histogram_event_node\n");
+		drm_event_cancel_free(dev, &e->base);
+		return -ENOMEM;
 	}
 
 	/*
@@ -171,43 +317,89 @@ int histogram_request_ioctl(struct drm_device *dev, void *data,
 	 * This will be allowed for multiple observer in the future.
 	 */
 	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
-	if (dqe->state.event) {
-		pr_warn("decon%u histogram already registered\n", decon->id);
-		drm_event_cancel_free(dev, &e->base);
+	if (histogram_find_event_node_locked(&dqe->state.hist_pending_events_list, hist_id, 0)) {
+		pr_warn("decon%u histogram%u already registered\n", decon->id, hist_id);
+		release_histogram_event_node(dev, e_node);
 		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 		return -EBUSY;
 	}
 
-	dqe->state.event = e;
+	list_add_tail(&e_node->node, &dqe->state.hist_pending_events_list);
+	hist_chan = &dqe->state.hist_chan[hist_id];
 
 	/* check cached state */
-	if (dqe->state.hist_run_state == HSTATE_HIBERNATION) {
+	if (hist_chan->run_state == HSTATE_HIBERNATION) {
 		if (dqe->verbose_hist)
 			pr_info("histogram: use cached data\n");
-		memcpy(&e->event.bins, &dqe->state.histogram_cached_bins, sizeof(e->event.bins));
-		histogram_emmit_event(dqe);
-	} else if (dqe->state.hist_run_state == HSTATE_IDLE) {
+		memcpy(&e->event.bins, &hist_chan->bins, sizeof(e->event.bins));
+		histogram_emmit_event_locked(dqe, e_node);
+	} else if (hist_chan->run_state == HSTATE_IDLE) {
 		if (dqe->verbose_hist)
 			pr_info("histogram: idle, query now\n");
-		histogram_collect_bins(dqe, &dqe->state.event->event.bins);
-		histogram_emmit_event(dqe);
+#if IS_ENABLED(CONFIG_SOC_ZUMA)
+		/* need to collect into cached bins: smc requires physical memory */
+		histogram_chan_collect_bins_locked(dqe, hist_id, &hist_chan->bins);
+		memcpy(&e->event.bins, &hist_chan->bins, sizeof(e->event.bins));
+#else
+		histogram_chan_collect_bins_locked(dqe, hist_id, &e->event.bins);
+#endif
+		histogram_emmit_event_locked(dqe, e_node);
 	}
+
 	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 
-	pr_debug("histogram: created event(0x%pK) of decon%u\n", dqe->state.event, decon->id);
+	pr_debug("histogram: created event(0x%pK) of decon%u, chan %u\n", e, decon->id, hist_id);
 
 	return 0;
 }
 
-int histogram_cancel_ioctl(struct drm_device *dev, void *data,
-				struct drm_file *file)
+int histogram_channel_cancel_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct decon_device *decon;
+	struct exynos_dqe *dqe;
+	unsigned long flags;
+	enum exynos_histogram_id hist_id;
+	struct histogram_event_node *e_node;
+	uint32_t crtc_id;
+	int ret;
+
+	/* validate the histogram ioctl argument */
+	ret = histogram_channel_ioctl_process_arg(dev, data, file, &crtc_id, &hist_id, &decon,
+						  &dqe);
+	if (ret) {
+		pr_err("histogram_channel_ioctl_process_arg failed, ret(%d)\n", ret);
+		return ret;
+	}
+
+	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
+	e_node = histogram_find_event_node_locked(&dqe->state.hist_pending_events_list, hist_id, 0);
+	if (e_node) {
+		pr_debug("remained event(0x%pK)\n", e_node->base);
+		release_histogram_event_node(dev, e_node);
+	}
+	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
+
+	pr_debug("histogram: terminated histogram event of decon%u, chan %u\n", decon->id, hist_id);
+
+	return 0;
+}
+
+static int histogram_event_ioctl_process_arg(struct drm_device *dev, void *data,
+					     struct drm_file *file, uint32_t *crtc_id,
+					     uint32_t *user_handle, struct decon_device **decon,
+					     struct exynos_dqe **dqe)
 {
 	struct drm_mode_object *obj;
 	struct exynos_drm_crtc *exynos_crtc;
-	struct decon_device *decon;
-	struct exynos_dqe *dqe;
-	uint32_t *crtc_id = data;
-	unsigned long flags;
+	struct exynos_drm_context_histogram_arg *request = data;
+
+	if (!data) {
+		pr_err("invalid histogram request, data is NULL\n");
+		return -EINVAL;
+	}
+
+	*crtc_id = request->crtc_id;
+	*user_handle = request->user_handle;
 
 	obj = drm_mode_object_find(dev, file, *crtc_id, DRM_MODE_OBJECT_CRTC);
 	if (!obj) {
@@ -218,58 +410,312 @@ int histogram_cancel_ioctl(struct drm_device *dev, void *data,
 	exynos_crtc = to_exynos_crtc(obj_to_crtc(obj));
 	drm_mode_object_put(obj);
 
-	decon = exynos_crtc->ctx;
-	dqe = decon->dqe;
-	if (!dqe) {
-		pr_err("failed to get dqe from decon%u\n", decon->id);
+	*decon = exynos_crtc->ctx;
+	*dqe = (*decon)->dqe;
+	if (!*dqe) {
+		pr_err("failed to get dqe from decon%u\n", (*decon)->id);
 		return -ENODEV;
 	}
 
-	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
-	if (dqe->state.event) {
-		pr_debug("remained event(0x%pK)\n", dqe->state.event);
-		drm_event_cancel_free(dev, &dqe->state.event->base);
-		dqe->state.event = NULL;
+	return 0;
+}
+
+int histogram_event_request_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct decon_device *decon;
+	struct exynos_dqe *dqe;
+	unsigned long flags;
+	struct histogram_event_node *e_node;
+	struct exynos_drm_pending_context_histogram_event *e;
+	enum exynos_histogram_id hist_id;
+	struct histogram_chan_state *hist_chan;
+	uint32_t crtc_id, user_handle;
+	int ret;
+
+	/* validate the histogram ioctl argument */
+	ret = histogram_event_ioctl_process_arg(dev, data, file, &crtc_id, &user_handle, &decon,
+						&dqe);
+	if (ret) {
+		pr_err("histogram_event_ioctl_process_arg failed, ret(%d)\n", ret);
+		return ret;
 	}
+	if (!user_handle) {
+		pr_err("decon%u: user_handle should not be 0\n", decon->id);
+		return -EINVAL;
+	}
+
+	e = create_context_histogram_event(dev, file, crtc_id, user_handle);
+	if (IS_ERR(e)) {
+		pr_err("create_context_histogram_event failed, ret(%ld)\n", PTR_ERR(e));
+		return PTR_ERR(e);
+	}
+
+	e_node = create_histogram_event_node(&e->base);
+	if (!e_node) {
+		pr_err("failed to allocate histogram_event_node\n");
+		drm_event_cancel_free(dev, &e->base);
+		return -ENOMEM;
+	}
+
+	/*
+	 * TODO: Now only one observer is allowed at a time at the moment.
+	 * This will be allowed for multiple observer in the future.
+	 */
+	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
+	if (histogram_find_event_node_locked(&dqe->state.hist_pending_events_list, HISTOGRAM_MAX,
+					     user_handle)) {
+		pr_warn("decon%u histogram event (handle#%u) already registered\n", decon->id,
+			user_handle);
+		release_histogram_event_node(dev, e_node);
+		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
+		return -EBUSY;
+	}
+
+	list_add_tail(&e_node->node, &dqe->state.hist_pending_events_list);
+	pr_debug("request event(0x%pK)\n", e);
+
+	/* check if any histogram channel is running this user_handle */
+	hist_chan = NULL;
+	for (hist_id = 0; hist_id < HISTOGRAM_MAX; hist_id++) {
+		if (dqe->state.hist_chan[hist_id].user_handle == user_handle) {
+			hist_chan = &dqe->state.hist_chan[hist_id];
+			break;
+		}
+	}
+	if (!hist_chan) {
+		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
+		return 0;
+	}
+
+	/* check cached state */
+	if (hist_chan->run_state == HSTATE_HIBERNATION) {
+		if (dqe->verbose_hist)
+			pr_info("histogram: use cached data\n");
+		memcpy(&e->event.bins, &hist_chan->bins, sizeof(e->event.bins));
+		histogram_emmit_event_locked(dqe, e_node);
+	} else if (hist_chan->run_state == HSTATE_IDLE) {
+		if (dqe->verbose_hist)
+			pr_info("histogram: idle, query now\n");
+#if IS_ENABLED(CONFIG_SOC_ZUMA)
+		/* need to collect into cached bins: smc requires physical memory */
+		histogram_chan_collect_bins_locked(dqe, hist_id, &hist_chan->bins);
+		memcpy(&e->event.bins, &hist_chan->bins, sizeof(e->event.bins));
+#else
+		histogram_chan_collect_bins_locked(dqe, hist_id, &e->event.bins);
+#endif
+		histogram_emmit_event_locked(dqe, e_node);
+	}
+
 	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 
-	pr_debug("terminated histogram event of decon%u\n", decon->id);
+	return 0;
+}
+
+int histogram_event_cancel_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
+{
+	struct decon_device *decon;
+	struct exynos_dqe *dqe;
+	unsigned long flags;
+	struct histogram_event_node *e_node;
+	uint32_t crtc_id, user_handle;
+	int ret;
+
+	/* validate the histogram ioctl argument */
+	ret = histogram_event_ioctl_process_arg(dev, data, file, &crtc_id, &user_handle, &decon,
+						&dqe);
+	if (ret) {
+		pr_err("histogram_event_ioctl_process_arg failed, ret(%d)\n", ret);
+		return ret;
+	}
+
+	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
+
+	/* user_handle 0 is special request to clear all events */
+	if (unlikely(!user_handle)) {
+		pr_info("decon%u: clear all events\n", decon->id);
+		while (!list_empty(&dqe->state.hist_pending_events_list)) {
+			e_node = list_first_entry(&dqe->state.hist_pending_events_list,
+						  struct histogram_event_node, node);
+			release_histogram_event_node(dev, e_node);
+		}
+
+		spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
+		return 0;
+	}
+
+	e_node = histogram_find_event_node_locked(&dqe->state.hist_pending_events_list,
+						  HISTOGRAM_MAX, user_handle);
+	if (e_node) {
+		pr_debug("terminate remained event(0x%pK)\n", e_node->base);
+		release_histogram_event_node(dev, e_node);
+	} else {
+		pr_debug("no event request for handle#%u\n", user_handle);
+	}
+
+	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 
 	return 0;
+}
+
+/*
+ * configure histogram channel
+ */
+int histogram_chan_configure(struct exynos_dqe *dqe, const enum exynos_histogram_id hist_id,
+			     struct histogram_channel_config *config)
+{
+	struct decon_device *decon = dqe->decon;
+	u32 id = decon->id;
+
+	if (hist_id >= HISTOGRAM_MAX)
+		return -EINVAL;
+
+	dqe_reg_set_histogram_threshold(id, hist_id, config->threshold);
+	dqe_reg_set_histogram_pos(id, hist_id, config->pos);
+	dqe_reg_set_histogram_roi(id, hist_id, &config->roi);
+	dqe_reg_set_histogram_weights(id, hist_id, &config->weights);
+#if IS_ENABLED(CONFIG_SOC_ZUMA)
+	if (config->flags & HISTOGRAM_FLAGS_BLOCKED_ROI)
+		dqe_reg_set_histogram_block_roi(id, hist_id, &config->blocked_roi);
+#endif
+	return 0;
+}
+
+int histogram_chan_set_state(struct exynos_dqe *dqe, const enum exynos_histogram_id hist_id,
+			     const enum histogram_state hist_state,
+			     histogram_chan_callback hist_cb)
+{
+	struct decon_device *decon = dqe->decon;
+	u32 id = decon->id;
+	struct histogram_chan_state *hist_chan;
+
+	if (!dqe || hist_id >= HISTOGRAM_MAX)
+		return -EINVAL;
+
+	hist_chan = &dqe->state.hist_chan[hist_id];
+
+	pr_debug("decon_id=%u, hist_id=%d hist_state=%d, curr_state=%d\n",
+		 id, hist_id, hist_state, hist_chan->state);
+
+	hist_chan->cb = hist_cb;
+	hist_chan->state = hist_state;
+	dqe_reg_set_histogram(id, hist_id, hist_state);
+
+	return 0;
+}
+
+static void histogram_chan_handle_event_locked(struct exynos_dqe *dqe, uint32_t hist_id,
+					       bool force_collect)
+{
+	struct histogram_chan_state *hist_chan = &dqe->state.hist_chan[hist_id];
+	histogram_chan_callback hist_cb = hist_chan->cb;
+	struct histogram_event_node *e_node;
+	struct histogram_bins *bins = NULL;
+
+	e_node = histogram_find_event_node_locked(&dqe->state.hist_pending_events_list, hist_id,
+						  hist_chan->user_handle);
+	if (!e_node && !hist_cb && !force_collect)
+		return;
+
+	histogram_chan_collect_bins_locked(dqe, hist_id, &hist_chan->bins);
+
+	/* handle DRM request */
+	if (e_node) {
+		pr_debug("decon%u histogram%u: handle event(0x%pK), rstate(%s)\n", dqe->decon->id,
+			 hist_id, e_node->base->event, str_run_state(hist_chan->run_state));
+
+		if (e_node->base->event->type == EXYNOS_DRM_HISTOGRAM_CHANNEL_EVENT) {
+			bins = &container_of(e_node->base,
+					     struct exynos_drm_pending_histogram_event, base)
+					->event.bins;
+		} else if (e_node->base->event->type == EXYNOS_DRM_CONTEXT_HISTOGRAM_EVENT) {
+			bins = &container_of(e_node->base,
+					     struct exynos_drm_pending_context_histogram_event,
+					     base)
+					->event.bins;
+		} else {
+			return;
+		}
+
+		memcpy(bins, &hist_chan->bins, sizeof(*bins));
+		histogram_emmit_event_locked(dqe, e_node);
+	}
+
+	/* handle LHBM request. TODO: review if LHBM can be moved to DRM fw. */
+	if (hist_cb)
+		(hist_cb)(dqe->decon->id, hist_id, &hist_chan->bins);
 }
 
 /* This function runs in interrupt context */
 void handle_histogram_event(struct exynos_dqe *dqe)
 {
-	spin_lock(&dqe->state.histogram_slock);
+	uint32_t hist_id;
 
-	/* return immediately if histogram disabled */
-	if (dqe->state.hist_run_state == HSTATE_DISABLED) {
-		spin_unlock(&dqe->state.histogram_slock);
-		return;
-	}
+	spin_lock(&dqe->state.histogram_slock);
 
 	/*
 	 * histogram engine data is available after first frame done.
+	 * collect data from all active channels.
 	 */
-	if (dqe->state.event) {
-		pr_debug("histogram: handle event(0x%pK), rstate(%s)\n",
-			 dqe->state.event, str_run_state(dqe->state.hist_run_state));
-		histogram_collect_bins(dqe, &dqe->state.event->event.bins);
-		histogram_emmit_event(dqe);
-	}
+	for (hist_id = 0; hist_id < HISTOGRAM_MAX; hist_id++) {
+		struct histogram_chan_state *hist_chan = &dqe->state.hist_chan[hist_id];
 
-	if ((atomic_read(&dqe->decon->frames_pending) == 0) &&
-	    (dqe->decon->config.mode.op_mode != DECON_VIDEO_MODE))
-		histogram_set_run_state(dqe, HSTATE_IDLE);
-	else
-		histogram_set_run_state(dqe, HSTATE_PENDING_FRAMEDONE);
+		/* skip if histogram channel is disabled */
+		if (hist_chan->run_state == HSTATE_DISABLED)
+			continue;
+
+		histogram_chan_handle_event_locked(dqe, hist_id, false);
+
+		if ((atomic_read(&dqe->decon->frames_pending) == 0) &&
+		    (dqe->decon->config.mode.op_mode != DECON_VIDEO_MODE))
+			histogram_chan_set_run_state_locked(dqe, hist_id, HSTATE_IDLE);
+		else
+			histogram_chan_set_run_state_locked(dqe, hist_id, HSTATE_PENDING_FRAMEDONE);
+	}
 
 	spin_unlock(&dqe->state.histogram_slock);
 }
 
-static void
-exynos_degamma_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
+void histogram_flip_done(struct exynos_dqe *dqe, const struct drm_crtc_state *new_crtc_state)
+{
+	unsigned long flags;
+	enum exynos_histogram_id hist_id;
+	const struct exynos_drm_crtc_state *new_exynos_crtc_state =
+		to_exynos_crtc_state(new_crtc_state);
+
+	DPU_ATRACE_BEGIN(__func__);
+	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
+
+	for (hist_id = 0; hist_id < HISTOGRAM_MAX; hist_id++) {
+		struct histogram_chan_state *hist_chan = &dqe->state.hist_chan[hist_id];
+		struct drm_property_blob *blob = new_exynos_crtc_state->histogram[hist_id];
+
+		/*
+		 * For run_state is HSTATE_HIBERNATION and state is HISTOGRAM_OFF, we should keep it
+		 * as HSTATE_HIBERNATION.
+		 * 1. We already cache the histogram bins in memory (hist_chan->bins) and
+		 *    hist_chan->state is set to OFF before entering hibernation.
+		 * 2. For the first commit to exit the hibernation, the skip_update is true to avoid
+		 *    most DPU updates including exynos_histogram_update. So the histogram bins
+		 *    cache should still serve this case until we have next non-skip frame update
+		 *    that will restore the histogram config.
+		 */
+		if (hist_chan->state != HISTOGRAM_OFF)
+			histogram_chan_set_run_state_locked(dqe, hist_id, HSTATE_PENDING_FRAMEDONE);
+		else if (hist_chan->run_state != HSTATE_HIBERNATION)
+			histogram_chan_set_run_state_locked(dqe, hist_id, HSTATE_DISABLED);
+
+		/*
+		 * Update the user_handle (config blob id) when the histogram config is really
+		 * applied to the DPU HW (shadow update completes and framestart occurs).
+		 */
+		hist_chan->user_handle = blob ? blob->base.id : 0;
+	}
+
+	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
+	DPU_ATRACE_END(__func__);
+}
+
+static void exynos_degamma_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 {
 	struct degamma_debug_override *degamma = &dqe->degamma;
 	struct exynos_debug_info *info = &degamma->info;
@@ -292,7 +738,7 @@ exynos_degamma_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 		dqe_reg_print_degamma_lut(id, &p);
 }
 
-static void
+static bool
 exynos_cgc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 {
 	struct cgc_debug_override *cgc = &dqe->cgc;
@@ -304,7 +750,7 @@ exynos_cgc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 
 	pr_debug("en(%d) dirty(%d)\n", info->force_en, info->dirty);
 	if (decon->cgc_dma && !info->force_en)
-		return;
+		return false;
 
 	if (info->force_en)
 		state->cgc_lut = &cgc->force_lut;
@@ -324,8 +770,7 @@ exynos_cgc_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 	if (info->verbose)
 		dqe_reg_print_cgc_lut(id, cgc->verbose_cnt, &p);
 
-	if (updated)
-		decon_reg_update_req_cgc(id);
+	return updated;
 }
 
 static void
@@ -336,6 +781,7 @@ exynos_regamma_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 	struct decon_device *decon = dqe->decon;
 	struct drm_printer p = drm_info_printer(decon->dev);
 	u32 id = decon->id;
+	u32 regamma_id = 0;
 
 	pr_debug("en(%d) dirty(%d)\n", info->force_en, info->dirty);
 
@@ -343,7 +789,7 @@ exynos_regamma_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 		state->regamma_lut = regamma->force_lut;
 
 	if (dqe->state.regamma_lut != state->regamma_lut || info->dirty) {
-		dqe_reg_set_regamma_lut(id, state->regamma_lut);
+		dqe_reg_set_regamma_lut(id, regamma_id, state->regamma_lut);
 		dqe->state.regamma_lut = state->regamma_lut;
 		info->dirty = false;
 	}
@@ -447,53 +893,125 @@ exynos_dither_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 		dqe_reg_print_dither(id, DISP_DITHER, &p);
 }
 
-static void
-exynos_histogram_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
+#ifdef CONFIG_SOC_ZUMA
+static void exynos_lhbm_histogram_callback(u32 dqe_id, enum exynos_histogram_id hist_id,
+					   struct histogram_bins *hist_bins)
+{
+	u32 i = 0, sum = 0;
+	u32 weighted_sum = 0;
+	struct decon_device *decon = get_decon_drvdata(dqe_id);
+	struct exynos_dqe *dqe = decon->dqe;
+
+	if (hist_id != HISTOGRAM_CHAN_LHBM)
+		return;
+
+	/* data is u16 not u8 */
+	for (i = 0; i < HISTOGRAM_BIN_COUNT; i++) {
+		sum += hist_bins->data[i];
+		weighted_sum += hist_bins->data[i] * i;
+	}
+	if (sum == 0)
+		return;
+	dqe->lhbm_gray_level = weighted_sum / sum;
+	if (dqe->gray_level_callback_data.update_gray_level_callback &&
+	    dqe->gray_level_callback_data.conn)
+		dqe->gray_level_callback_data.update_gray_level_callback(
+			dqe->gray_level_callback_data.conn, dqe->lhbm_gray_level);
+}
+
+static void exynos_lhbm_histogram_update(struct decon_device *decon)
+{
+	if (!decon || !decon->dqe || decon->dqe->lhbm_hist_config.roi.hsize == 0)
+		return;
+
+	histogram_chan_configure(decon->dqe, HISTOGRAM_CHAN_LHBM, &decon->dqe->lhbm_hist_config);
+	histogram_chan_set_state(decon->dqe, HISTOGRAM_CHAN_LHBM, HISTOGRAM_ROI,
+				 exynos_lhbm_histogram_callback);
+	histogram_chan_set_run_state_locked(decon->dqe, HISTOGRAM_CHAN_LHBM,
+					    HSTATE_PENDING_FRAMEDONE);
+}
+#endif
+
+static void exynos_histogram_channel_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state,
+					    const enum exynos_histogram_id hist_id)
 {
 	enum histogram_state hist_state;
-	struct decon_device *decon = dqe->decon;
-	struct drm_printer p = drm_info_printer(decon->dev);
-	u32 id = decon->id;
 	unsigned long flags;
+	struct histogram_chan_state *hist_chan = &dqe->state.hist_chan[hist_id];
+	bool config_changed = false;
 
-	if (dqe->state.roi != state->roi) {
-		dqe_reg_set_histogram_roi(id, state->roi);
-		dqe->state.roi = state->roi;
-	}
-
-	if (dqe->state.weights != state->weights) {
-		dqe_reg_set_histogram_weights(id, state->weights);
-		dqe->state.weights = state->weights;
-	}
-
-	if (dqe->state.histogram_threshold != state->histogram_threshold) {
-		dqe_reg_set_histogram_threshold(id, state->histogram_threshold);
-		dqe->state.histogram_threshold = state->histogram_threshold;
-	}
-
-	if (dqe->state.histogram_pos != state->histogram_pos) {
-		dqe_reg_set_histogram_pos(id, state->histogram_pos);
-		dqe->state.histogram_pos = state->histogram_pos;
-	}
-
-	if (state->weights && state->roi)
-		hist_state = HISTOGRAM_ROI;
-	else if (state->weights)
-		hist_state = HISTOGRAM_FULL;
-	else
-		hist_state = HISTOGRAM_OFF;
+	if (hist_id >= HISTOGRAM_MAX)
+		return;
 
 	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
-	if (hist_state == HISTOGRAM_OFF)
-		histogram_set_run_state(dqe, HSTATE_DISABLED);
-	else
-		histogram_set_run_state(dqe, HSTATE_PENDING_FRAMEDONE);
-	dqe->state.hist_state = hist_state;
-	dqe_reg_set_histogram(id, hist_state);
+
+	/*
+	 * DRM framework histogram channel configuration
+	 */
+	if (hist_chan->config != state->hist_chan[hist_id].config) {
+		u32 weights, roi;
+		struct histogram_channel_config *config = state->hist_chan[hist_id].config;
+
+		config_changed = true;
+		hist_chan->config = config;
+		if (!config) {
+			histogram_chan_set_state(dqe, hist_id, HISTOGRAM_OFF, NULL);
+			goto update_run_state;
+		}
+
+		histogram_chan_configure(dqe, hist_id, config);
+
+		/* refer to values to identify histogram operation mode */
+		weights = config->weights.weight_b + config->weights.weight_g +
+			  config->weights.weight_r;
+		roi = config->roi.hsize + config->roi.vsize;
+		if (weights && roi) {
+			hist_state = HISTOGRAM_ROI;
+#if IS_ENABLED(CONFIG_SOC_ZUMA)
+			if (config->flags & HISTOGRAM_FLAGS_BLOCKED_ROI)
+				hist_state = HISTOGRAM_BLOCKED_ROI;
+#endif
+		} else if (weights) {
+			hist_state = HISTOGRAM_FULL;
+#if IS_ENABLED(CONFIG_SOC_ZUMA)
+			if (config->flags & HISTOGRAM_FLAGS_BLOCKED_ROI)
+				hist_state = HISTOGRAM_BLOCKED_FULL;
+#endif
+		} else {
+			hist_state = HISTOGRAM_OFF;
+		}
+		histogram_chan_set_state(dqe, hist_id, hist_state, NULL);
+	}
+
+update_run_state:
+
+	/*
+	 * Since the framestart will happen very soon after decon_atomic_flush, we should prevent
+	 * any risk to capture the in-between frames histogram bins. Set run_state to
+	 * HSTATE_PENDING_FRAMEDONE for almost every case except no config changed and already
+	 * channel disabled. histogram_flip_done will update the run_state more accurately.
+	 */
+	if (config_changed || hist_chan->state != HISTOGRAM_OFF)
+		histogram_chan_set_run_state_locked(dqe, hist_id, HSTATE_PENDING_FRAMEDONE);
+
 	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
+}
+
+static void exynos_histogram_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
+{
+	struct decon_device *decon = dqe->decon;
+	struct drm_printer p = drm_info_printer(decon->dev);
+	int i;
+
+	for (i = 0; i < HISTOGRAM_MAX; i++)
+		exynos_histogram_channel_update(dqe, state, i);
+
+#if IS_ENABLED(CONFIG_SOC_ZUMA)
+	exynos_lhbm_histogram_update(decon);
+#endif
 
 	if (dqe->verbose_hist)
-		dqe_reg_print_hist(id, &p);
+		dqe_reg_print_hist(decon->id, &p);
 }
 
 static void exynos_rcd_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
@@ -528,8 +1046,7 @@ static void exynos_set_cgc_dma(struct decon_device *decon, struct exynos_dqe_sta
 	}
 }
 
-static void exynos_cgc_dma_update(struct exynos_dqe *dqe,
-					struct exynos_dqe_state *state)
+static bool exynos_cgc_dma_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state)
 {
 	struct decon_device *decon = dqe->decon;
 	struct cgc_debug_override *cgc = &dqe->cgc;
@@ -539,7 +1056,7 @@ static void exynos_cgc_dma_update(struct exynos_dqe *dqe,
 	bool updated = false;
 
 	if (!decon->cgc_dma || info->force_en)
-		return;
+		return false;
 
 	if (dqe->state.cgc_gem != state->cgc_gem) {
 		exynos_set_cgc_dma(decon, state);
@@ -554,15 +1071,15 @@ static void exynos_cgc_dma_update(struct exynos_dqe *dqe,
 	if (info->verbose)
 		dqe_reg_print_cgc_lut(id, cgc->verbose_cnt, &p);
 
-	if (updated)
-		decon_reg_update_req_cgc(id);
+	return updated;
 }
 
 static void __exynos_dqe_update(struct exynos_dqe *dqe,
-		struct exynos_dqe_state *state, u32 width, u32 height)
+				struct exynos_dqe_state *state, u32 width, u32 height)
 {
-	const struct decon_device *decon = dqe->decon;
+	struct decon_device *decon = dqe->decon;
 	u32 id = decon->id;
+	bool cgc_updated;
 
 	pr_debug("enabled(%d) +\n", state->enabled);
 
@@ -582,14 +1099,15 @@ static void __exynos_dqe_update(struct exynos_dqe *dqe,
 	exynos_gamma_matrix_update(dqe, state);
 	exynos_degamma_update(dqe, state);
 	exynos_linear_matrix_update(dqe, state);
-	exynos_cgc_update(dqe, state);
+	cgc_updated = exynos_cgc_update(dqe, state);
 	exynos_regamma_update(dqe, state);
 	exynos_dither_update(dqe, state);
 	exynos_histogram_update(dqe, state);
 	exynos_rcd_update(dqe, state);
-	exynos_cgc_dma_update(dqe, state);
+	cgc_updated |= exynos_cgc_dma_update(dqe, state);
 
-	decon_reg_update_req_dqe(id);
+	decon->dqe_need_update = true;
+	decon->cgc_need_update |= cgc_updated;
 
 	pr_debug("-\n");
 }
@@ -610,23 +1128,47 @@ void exynos_dqe_update(struct exynos_dqe *dqe, struct exynos_dqe_state *state,
 void exynos_dqe_hibernation_enter(struct exynos_dqe *dqe)
 {
 	unsigned long flags;
+	enum exynos_histogram_id hist_id;
+	struct histogram_chan_state *hist_chan;
+	bool decon_idle;
 
 	if (!dqe->state.enabled)
 		return;
 
+	DPU_ATRACE_BEGIN(__func__);
 	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
-	if (dqe->state.hist_run_state == HSTATE_IDLE) {
-		histogram_collect_bins(dqe, &dqe->state.histogram_cached_bins);
-		histogram_set_run_state(dqe, HSTATE_HIBERNATION);
-	} else if (dqe->state.hist_run_state == HSTATE_PENDING_FRAMEDONE) {
-		pr_debug("pending histogram during hibernation\n");
-		histogram_set_run_state(dqe, HSTATE_DISABLED);
+	decon_idle = decon_reg_is_idle(dqe->decon->id);
+
+	for (hist_id = 0; hist_id < HISTOGRAM_MAX; hist_id++) {
+		hist_chan = &dqe->state.hist_chan[hist_id];
+
+		if (hist_chan->run_state == HSTATE_IDLE) {
+			histogram_chan_collect_bins_locked(dqe, hist_id, &hist_chan->bins);
+			histogram_chan_set_run_state_locked(dqe, hist_id, HSTATE_HIBERNATION);
+		} else if (hist_chan->run_state == HSTATE_PENDING_FRAMEDONE) {
+			if (!decon_idle) {
+				/* mark as disabled to avoid start_pending_framedone
+				 * related issues
+				 */
+				pr_warn("decon%u histogram%u: pending framedone during hibernation\n",
+					dqe->decon->id, hist_id);
+				histogram_chan_set_run_state_locked(dqe, hist_id, HSTATE_DISABLED);
+			} else {
+				pr_debug("decon%u histogram%u: decon is already idle\n",
+					 dqe->decon->id, hist_id);
+				histogram_chan_handle_event_locked(dqe, hist_id, true);
+				histogram_chan_set_run_state_locked(dqe, hist_id,
+								    HSTATE_HIBERNATION);
+			}
+		}
 	}
 	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
+	DPU_ATRACE_END(__func__);
 }
 
 void exynos_dqe_reset(struct exynos_dqe *dqe)
 {
+	int i;
 	unsigned long flags;
 
 	dqe->initialized = false;
@@ -639,17 +1181,23 @@ void exynos_dqe_reset(struct exynos_dqe *dqe)
 	dqe->state.cgc_dither_config = NULL;
 	dqe->cgc.first_write = false;
 	dqe->force_atc_config.dirty = true;
-	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
-	dqe->state.histogram_threshold = 0;
-	dqe->state.histogram_pos = POST_DQE;
-	dqe->state.hist_state = HISTOGRAM_OFF;
-	if (dqe->state.hist_run_state != HSTATE_HIBERNATION)
-		histogram_set_run_state(dqe, HSTATE_DISABLED);
-	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
-	dqe->state.roi = NULL;
-	dqe->state.weights = NULL;
 	dqe->state.rcd_enabled = false;
 	dqe->state.cgc_gem = NULL;
+	dqe->lhbm_hist_configured = false;
+
+	/* reflect histogram state  */
+	spin_lock_irqsave(&dqe->state.histogram_slock, flags);
+	for (i = 0; i < HISTOGRAM_MAX; i++) {
+		struct histogram_chan_state *hist_chan = &dqe->state.hist_chan[i];
+
+		hist_chan->config = NULL;
+		hist_chan->state = HISTOGRAM_OFF;
+		if (hist_chan->run_state != HSTATE_HIBERNATION) {
+			histogram_chan_set_run_state_locked(dqe, i, HSTATE_DISABLED);
+			hist_chan->user_handle = 0;
+		}
+	}
+	spin_unlock_irqrestore(&dqe->state.histogram_slock, flags);
 }
 
 void exynos_dqe_save_lpd_data(struct exynos_dqe *dqe)
@@ -694,6 +1242,23 @@ static void set_default_atc_config(struct exynos_atc *atc)
 	atc->threshold_3 = 0x1;
 	atc->gain_limit = 0x1FF;
 	atc->lt_calc_ab_shift = 0x1;
+	atc->dim_ratio = 0xFF;
+#ifdef CONFIG_SOC_ZUMA
+	atc->la_w_on = true;
+	atc->la_w = 0x4;
+	atc->lt_calc_mode = 0x0;
+	atc->gt_lamda_dstep = 0x4;
+	atc->gt_lamda = 0x100;
+	atc->gt_he_enable = false;
+	atc->he_clip_min_0 = 0x40302010;
+	atc->he_clip_min_1 = 0x80706050;
+	atc->he_clip_min_2 = 0xc0b0a090;
+	atc->he_clip_min_3 = 0xf0e0d0;
+	atc->he_clip_max_0 = 0xa99b8970;
+	atc->he_clip_max_1 = 0xd0c8bfb5;
+	atc->he_clip_max_2 = 0xebe5dfd8;
+	atc->he_clip_max_3 = 0xfbf6f1;
+#endif
 }
 
 static ssize_t
@@ -735,6 +1300,22 @@ atc_bool_store(struct exynos_dqe *dqe, bool *val, const char *buf, size_t count)
 	return count;
 }
 
+#if IS_ENABLED(CONFIG_SOC_ZUMA)
+static ssize_t
+atc_u32_store(struct exynos_dqe *dqe, u32 *val, const char *buf, size_t count)
+{
+	int ret;
+
+	ret = kstrtou32(buf, 0, val);
+	if (ret)
+		return ret;
+
+	dqe->force_atc_config.dirty = true;
+
+	return count;
+}
+#endif
+
 #define DQE_ATC_ATTR_RW(_name, _save, _fmt)	\
 static ssize_t _name##_store(struct device *dev,	\
 		struct device_attribute *attr, const char *buf, size_t count) \
@@ -754,6 +1335,7 @@ static DEVICE_ATTR_RW(_name)
 #define DQE_ATC_ATTR_U8_RW(_name) DQE_ATC_ATTR_RW(_name, atc_u8_store, "%u")
 #define DQE_ATC_ATTR_U16_RW(_name) DQE_ATC_ATTR_RW(_name, atc_u16_store, "%u")
 #define DQE_ATC_ATTR_BOOL_RW(_name) DQE_ATC_ATTR_RW(_name, atc_bool_store, "%d")
+#define DQE_ATC_ATTR_U32_RW(_name) DQE_ATC_ATTR_RW(_name, atc_u32_store, "%u")
 
 DQE_ATC_ATTR_BOOL_RW(en);
 DQE_ATC_ATTR_U8_RW(lt);
@@ -775,6 +1357,23 @@ DQE_ATC_ATTR_U8_RW(threshold_2);
 DQE_ATC_ATTR_U8_RW(threshold_3);
 DQE_ATC_ATTR_U16_RW(gain_limit);
 DQE_ATC_ATTR_U8_RW(lt_calc_ab_shift);
+DQE_ATC_ATTR_U16_RW(dim_ratio);
+#ifdef CONFIG_SOC_ZUMA
+DQE_ATC_ATTR_BOOL_RW(la_w_on);
+DQE_ATC_ATTR_U8_RW(la_w);
+DQE_ATC_ATTR_BOOL_RW(lt_calc_mode);
+DQE_ATC_ATTR_U8_RW(gt_lamda_dstep);
+DQE_ATC_ATTR_U16_RW(gt_lamda);
+DQE_ATC_ATTR_BOOL_RW(gt_he_enable);
+DQE_ATC_ATTR_U32_RW(he_clip_min_0);
+DQE_ATC_ATTR_U32_RW(he_clip_min_1);
+DQE_ATC_ATTR_U32_RW(he_clip_min_2);
+DQE_ATC_ATTR_U32_RW(he_clip_min_3);
+DQE_ATC_ATTR_U32_RW(he_clip_max_0);
+DQE_ATC_ATTR_U32_RW(he_clip_max_1);
+DQE_ATC_ATTR_U32_RW(he_clip_max_2);
+DQE_ATC_ATTR_U32_RW(he_clip_max_3);
+#endif
 
 static ssize_t force_update_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
@@ -868,6 +1467,23 @@ static struct attribute *atc_attrs[] = {
 	&dev_attr_threshold_3.attr,
 	&dev_attr_gain_limit.attr,
 	&dev_attr_lt_calc_ab_shift.attr,
+	&dev_attr_dim_ratio.attr,
+#ifdef CONFIG_SOC_ZUMA
+	&dev_attr_la_w_on.attr,
+	&dev_attr_la_w.attr,
+	&dev_attr_lt_calc_mode.attr,
+	&dev_attr_gt_lamda_dstep.attr,
+	&dev_attr_gt_lamda.attr,
+	&dev_attr_gt_he_enable.attr,
+	&dev_attr_he_clip_min_0.attr,
+	&dev_attr_he_clip_min_1.attr,
+	&dev_attr_he_clip_min_2.attr,
+	&dev_attr_he_clip_min_3.attr,
+	&dev_attr_he_clip_max_0.attr,
+	&dev_attr_he_clip_max_1.attr,
+	&dev_attr_he_clip_max_2.attr,
+	&dev_attr_he_clip_max_3.attr,
+#endif
 	NULL,
 };
 ATTRIBUTE_GROUPS(atc);
@@ -882,6 +1498,8 @@ static enum dqe_version exynos_get_dqe_version(void)
 	dqe_ver = gs_chipid_get_type() ? DQE_V2 : DQE_V1;
 #elif defined(CONFIG_SOC_GS201)
 	dqe_ver = DQE_V3;
+#elif defined(CONFIG_SOC_ZUMA)
+	dqe_ver = DQE_V4;
 #else
 	#error "Unknown DQE version."
 #endif
@@ -923,13 +1541,28 @@ struct exynos_dqe *exynos_dqe_register(struct decon_device *decon)
 
 	dqe_version = exynos_get_dqe_version();
 	dqe_regs_desc_init(dqe->regs, res.start, "dqe", dqe_version, decon->id);
+
+	i = of_property_match_string(np, "reg-names", "dqe-cgc");
+	if (i < 0)
+		pr_debug("dqe-cgc is not supported\n");
+
+	if (i >= 0 && of_address_to_resource(np, i, &res)) {
+		pr_err("failed to get dqe cgc resource\n");
+		return NULL;
+	}
+
+	dqe->cgc_regs = of_iomap(np, i);
+
+	dqe_cgc_regs_desc_init(dqe->cgc_regs, res.start, "dqe-cgc", dqe_version, decon->id);
+
 	dqe->funcs = &dqe_funcs;
 	dqe->initialized = false;
 	dqe->decon = decon;
 	spin_lock_init(&dqe->state.histogram_slock);
+	INIT_LIST_HEAD(&dqe->state.hist_pending_events_list);
 
 	scnprintf(dqe_name, MAX_DQE_NAME_SIZE, "dqe%u", decon->id);
-	dqe->dqe_class = class_create(dqe_name);
+	dqe->dqe_class = class_create(THIS_MODULE, dqe_name);
 	if (IS_ERR(dqe->dqe_class)) {
 		pr_err("failed to create dqe class\n");
 		return NULL;
@@ -946,6 +1579,8 @@ struct exynos_dqe *exynos_dqe_register(struct decon_device *decon)
 
 	pr_info("display quality enhancer is supported(DQE_V%d)\n",
 			dqe_version + 1);
+
+	dma_coerce_mask_and_coherent(dqe->dev, DMA_BIT_MASK(64));
 
 	return dqe;
 }

@@ -343,14 +343,14 @@ static void s6e3hc3_update_te2(struct exynos_panel *ctx)
 		ctx->panel_idle_vrefresh ? "active" : "inactive",
 		width[1], width[2], width[3], width[4], width[5], width[6]);
 
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0xF0, 0x5A, 0x5A);
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x00, 0x4F, 0xF2);
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0xF2, 0x0D);
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x00, 0x01, 0xB9);
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0xB9, option);
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0xB0, 0x00, 0x14, 0xB9);
-	EXYNOS_DCS_WRITE_TABLE(ctx, width);
-	EXYNOS_DCS_WRITE_SEQ(ctx, 0xF0, 0xA5, 0xA5);
+	EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x00, 0x4F, 0xF2);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xF2, 0x0D);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x00, 0x01, 0xB9);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xB9, option);
+	EXYNOS_DCS_BUF_ADD(ctx, 0xB0, 0x00, 0x14, 0xB9);
+	EXYNOS_DCS_BUF_ADD_SET(ctx, width);
+	EXYNOS_DCS_BUF_ADD_SET_AND_FLUSH(ctx, lock_cmd_f0);
 }
 
 static inline bool is_auto_mode_preferred(struct exynos_panel *ctx)
@@ -607,7 +607,7 @@ static int s6e3hc3_atomic_check(struct exynos_panel *ctx, struct drm_atomic_stat
 	struct drm_crtc_state *old_crtc_state, *new_crtc_state;
 	struct s6e3hc3_panel *spanel = to_spanel(ctx);
 
-	if (drm_mode_vrefresh(&ctx->current_mode->mode) == 120 ||
+	if (!ctx->current_mode || drm_mode_vrefresh(&ctx->current_mode->mode) == 120 ||
 	    !new_conn_state || !new_conn_state->crtc)
 		return 0;
 
@@ -865,7 +865,6 @@ static int s6e3hc3_enable(struct drm_panel *panel)
 	EXYNOS_DCS_BUF_ADD_SET(ctx, unlock_cmd_f0);
 	EXYNOS_DCS_BUF_ADD(ctx, 0xC3, is_fhd ? 0x01: 0x00);
 	EXYNOS_DCS_BUF_ADD_SET_AND_FLUSH(ctx, lock_cmd_f0);
-
 	s6e3hc3_write_display_mode(ctx, mode); /* dimming and HBM */
 	s6e3hc3_change_frequency(ctx, pmode);
 	if (is_local_gamma_supported(ctx))
@@ -955,7 +954,7 @@ static void s6e3hc3_commit_done(struct exynos_panel *ctx)
 	const struct s6e3hc3_mode_data *mdata;
 	const struct s6e3hc3_panel *spanel = to_spanel(ctx);
 
-	if (!ctx->enabled || !ctx->current_mode)
+	if (!ctx->enabled || ctx->current_mode->exynos_mode.is_lp_mode)
 		return;
 
 	mdata = ctx->current_mode->priv_data;
@@ -1065,9 +1064,6 @@ static void s6e3hc3_set_local_hbm_mode(struct exynos_panel *ctx,
 {
 	const struct exynos_panel_mode *pmode = ctx->current_mode;
 
-	/* start from EVT1, `freq set` will set to 120hz when enabling LHBM,
-	 * need to make sure refresh rate is 120hz before enable LHBM
-	 */
 	s6e3hc3_extra_lhbm_settings(ctx, local_hbm_en);
 	s6e3hc3_write_display_mode(ctx, &pmode->mode);
 }
@@ -1480,9 +1476,9 @@ const struct exynos_panel_desc samsung_s6e3hc3 = {
 	.num_modes = ARRAY_SIZE(s6e3hc3_modes),
 	.vrefresh_range = s6e3hc3_vrefresh_range,
 	.vrefresh_range_count = ARRAY_SIZE(s6e3hc3_vrefresh_range),
+	.lp_cmd_set = &s6e3hc3_lp_cmd_set,
 	.lp_mode = s6e3hc3_lp_modes,
 	.lp_mode_count = ARRAY_SIZE(s6e3hc3_lp_modes),
-	.lp_cmd_set = &s6e3hc3_lp_cmd_set,
 	.lp_vrefresh_range = s6e3hc3_lp_vrefresh_range,
 	.lp_vrefresh_range_count = ARRAY_SIZE(s6e3hc3_lp_vrefresh_range),
 	.binned_lp = s6e3hc3_binned_lp,

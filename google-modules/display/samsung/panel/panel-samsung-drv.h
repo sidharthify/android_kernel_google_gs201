@@ -18,6 +18,7 @@
 #include <linux/delay.h>
 #include <linux/regulator/consumer.h>
 #include <linux/gpio/consumer.h>
+#include <linux/of_gpio.h>
 #include <linux/backlight.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_connector.h>
@@ -28,6 +29,7 @@
 #include <drm/drm_mipi_dsi.h>
 
 #include "../exynos_drm_connector.h"
+#include "panel-common.h"
 
 #define MAX_REGULATORS		3
 #define MAX_HDR_FORMATS		4
@@ -35,13 +37,9 @@
 #define MAX_VREFRESH_RANGES	10
 #define MAX_RESOLUTION_TABLES	2
 
-#define MAX_TE2_TYPE			10
+#define MAX_TE2_TYPE			20
 #define FIXED_TE2_VREFRESH_NORMAL	120
 #define FIXED_TE2_VREFRESH_LP		30
-
-#define HDR_DOLBY_VISION	BIT(1)
-#define HDR_HDR10		BIT(2)
-#define HDR_HLG			BIT(3)
 
 #define BL_STATE_STANDBY	BL_CORE_FBBLANK
 #define BL_STATE_LP		BIT(30) /* backlight is in LP mode */
@@ -60,6 +58,7 @@
 #define PANEL_REV_DVT1		BIT(9)
 #define PANEL_REV_DVT1_1	BIT(10)
 #define PANEL_REV_PVT		BIT(11)
+#define PANEL_REV_MP		BIT(12)
 #define PANEL_REV_LATEST	BIT(31)
 #define PANEL_REV_ALL		(~0)
 #define PANEL_REV_GE(rev)	(~((rev) - 1))
@@ -82,9 +81,17 @@
 #define HBM_FLAG_BL_UPDATE      BIT(1)
 #define HBM_FLAG_LHBM_UPDATE    BIT(2)
 #define HBM_FLAG_DIMMING_UPDATE BIT(3)
+#define HBM_FLAG_OP_RATE_UPDATE BIT(4)
 
 #define IS_HBM_ON(mode)	((mode) >= HBM_ON_IRC_ON && (mode) < HBM_STATE_MAX)
 #define IS_HBM_ON_IRC_OFF(mode)	(((mode) == HBM_ON_IRC_OFF))
+
+/* Default panel ready timeout (ms) */
+#define PANEL_READY_TIMEOUT_MS (500)
+
+#define PANEL_REFRESH_CTRL_FI BIT(0)
+#define PANEL_REFRESH_CTRL_IDLE BIT(1)
+#define PANEL_REFRESH_CTRL_MASK (PANEL_REFRESH_CTRL_FI | PANEL_REFRESH_CTRL_IDLE)
 
 /**
  * enum exynos_panel_state - panel operating state
@@ -143,6 +150,12 @@ enum exynos_cabc_mode {
 	CABC_MOVIE_MODE,
 };
 
+enum gpio_level {
+	GPIO_LEVEL_LOW = 0,
+	GPIO_LEVEL_HIGH,
+	GPIO_LEVEL_UNSPECIFIED,
+};
+
 struct exynos_panel;
 
 struct exynos_panel_te2_timing {
@@ -150,6 +163,16 @@ struct exynos_panel_te2_timing {
 	u16 rising_edge;
 	/* @falling_edge: vertical end point */
 	u16 falling_edge;
+};
+
+enum exynos_acl_mode {
+	ACL_OFF = 0,
+	ACL_NORMAL,
+	ACL_ENHANCED,
+};
+
+enum exynos_panel_notifier_action {
+	EXYNOS_PANEL_NOTIFIER_SET_OP_HZ = 0,
 };
 
 /**
@@ -175,6 +198,16 @@ struct exynos_panel_mode {
 	 * type of idle mode is supported, for more info refer to enum exynos_panel_idle_mode.
 	 */
 	enum exynos_panel_idle_mode idle_mode;
+};
+
+/**
+ * struct exynos_brightness_configuration - brightness settings for a panel
+ * revision.
+ */
+struct exynos_brightness_configuration {
+	const u32 panel_rev;
+	const u32 dft_brightness;
+	const struct brightness_capability brt_capability;
 };
 
 struct exynos_panel_funcs {
@@ -213,6 +246,14 @@ struct exynos_panel_funcs {
 	void (*set_binned_lp)(struct exynos_panel *exynos_panel, u16 br);
 
 	/**
+	 * @set_post_lp_mode:
+	 *
+	 * This callback is used to handle additional operations after set_lp_mode and
+	 * first set_binned_lp are called.
+	 */
+	void (*set_post_lp_mode)(struct exynos_panel *exynos_panel);
+
+	/**
 	 * @set_hbm_mode:
 	 *
 	 * This callback is used to implement panel specific logic for high brightness
@@ -235,11 +276,10 @@ struct exynos_panel_funcs {
 	 * @set_cabc_mode:
 	 *
 	 * This callback is used to implement panel specific logic for cabc mode
-	 * enablement. If this is not defined, it means that panel does not support
-	 * cabc.
+	 * enablement. If this is not defined, it means that panel does not
+	 * support cabc.
 	 */
-	void (*set_cabc_mode)(struct exynos_panel *exynos_panel,
-				 enum exynos_cabc_mode mode);
+	void (*set_cabc_mode)(struct exynos_panel *exynos_panel, enum exynos_cabc_mode mode);
 
 	/**
 	 * @set_local_hbm_mode:
@@ -250,12 +290,53 @@ struct exynos_panel_funcs {
 	 */
 	void (*set_local_hbm_mode)(struct exynos_panel *exynos_panel,
 				 bool local_hbm_en);
+
+	/**
+	 * @set_local_hbm_mode_post:
+	 *
+	 * This callback is used to implement panel specific logic at some time after enabling
+	 * local high brightness mode.
+	 */
+	void (*set_local_hbm_mode_post)(struct exynos_panel *exynos_panel);
+
+	/**
+	 * @set_acl_mode:
+	 *
+	 * This callback is used to implement panel specific logic for acl mode
+	 * enablement. If this is not defined, it means that panel does not
+	 * support acl.
+	 */
+	void (*set_acl_mode)(struct exynos_panel *exynos_panel, enum exynos_acl_mode mode);
+
+	/**
+	 * @set_ssc_en:
+	 *
+	 * This callback is used to implement panel specific logic for ssc mode
+	 * enablement. If this is not defined, it means that panel does not
+	 * support ssc.
+	 */
+	void (*set_ssc_en)(struct exynos_panel *exynos_panel, bool enabled);
+
 	/**
 	 * @set_power:
 	 *
 	 * This callback is used to implement panel specific power on/off sequence.
 	 */
 	int (*set_power)(struct exynos_panel *exynos_panel, bool enable);
+
+	/**
+	 * @post_power_on:
+	 *
+	 * This callback is used to implement panel specific post_power_on sequence.
+	 */
+	int (*post_power_on)(struct exynos_panel *exynos_panel);
+
+	/**
+	 * @pre_power_off:
+	 *
+	 * This callback is used to implement panel specific pre_power_off sequence.
+	 */
+	int (*pre_power_off)(struct exynos_panel *ctx);
 
 	/**
 	 * @is_mode_seamless:
@@ -275,6 +356,14 @@ struct exynos_panel_funcs {
 	 */
 	void (*mode_set)(struct exynos_panel *exynos_panel,
 			 const struct exynos_panel_mode *mode);
+
+	/**
+	 * @panel_config:
+	 *
+	 * This callback is used to do one time panel configuration before the
+	 * common driver initialization.
+	 */
+	int (*panel_config)(struct exynos_panel *exynos_panel);
 
 	/**
 	 * @panel_init:
@@ -406,6 +495,13 @@ struct exynos_panel_funcs {
 	bool (*set_self_refresh)(struct exynos_panel *exynos_panel, bool enable);
 
 	/**
+	 * @refresh_ctrl
+	 *
+	 * Control some panel refresh behaviors for panels.
+	 */
+	void (*refresh_ctrl)(struct exynos_panel *exynos_panel, u32 ctrl);
+
+	/**
 	 * @set_op_hz
 	 *
 	 * set display panel working on specified operation rate.
@@ -429,6 +525,30 @@ struct exynos_panel_funcs {
 	ssize_t (*list_osc2_clk_khz)(struct exynos_panel *exynos_panel, char *buf);
 
 	/**
+	 * @get_te_usec
+	 *
+	 * This callback is used to get current TE pulse time.
+	 */
+	unsigned int (*get_te_usec)(struct exynos_panel *exynos_panel,
+				    const struct exynos_panel_mode *pmode);
+
+	/**
+	 * @rr_need_te_high
+	 *
+	 * check if a panel needs send rr cmds at TE high window.
+	 */
+	bool (*rr_need_te_high)(struct exynos_panel *exynos_panel,
+				    const struct exynos_panel_mode *pmode);
+
+	/**
+	 * @run_normal_mode_work
+	 *
+	 * This callback is used to run the periodic work for each panel in
+	 * normal mode.
+	 */
+	void (*run_normal_mode_work)(struct exynos_panel *exynos_panel);
+
+	/**
 	 * @parse_regulators
 	 *
 	 * Parse regulators for panel.
@@ -436,12 +556,26 @@ struct exynos_panel_funcs {
 	int (*parse_regulators)(struct exynos_panel *ctx);
 
 	/**
-	 * @get_te_usec
+	 * @update_ffc
 	 *
-	 * This callback is used to get current TE pulse time.
+	 * This callback is used to update FFC (Frame Frequency Control) for panel.
+	 * The unit of DSI HS clock is Mbps (megabits per second).
 	 */
-	unsigned int (*get_te_usec)(struct exynos_panel *exynos_panel,
-				    const struct exynos_panel_mode *pmode);
+	void (*update_ffc)(struct exynos_panel *exynos_panel, unsigned int hs_clk_mbps);
+
+	/**
+	 * @pre_update_ffc
+	 *
+	 * This callback is used to do something before updating FFC for panel.
+	 */
+	void (*pre_update_ffc)(struct exynos_panel *exynos_panel);
+
+	/**
+	 * @get_pwr_vreg:
+	 *
+	 * This callback is used to get panel power Vreg settings.
+	 */
+	void (*get_pwr_vreg)(struct exynos_panel *exynos_panel, char *buf, size_t len);
 
 	/**
 	 * @on_queue_ddic_cmd
@@ -491,6 +625,31 @@ struct exynos_binned_lp {
 	struct exynos_panel_te2_timing te2_timing;
 };
 
+enum panel_reset_timing {
+	PANEL_RESET_TIMING_HIGH = 0,
+	PANEL_RESET_TIMING_LOW,
+	PANEL_RESET_TIMING_INIT,
+	PANEL_RESET_TIMING_COUNT
+};
+
+enum panel_reg_id {
+	PANEL_REG_ID_INVALID = 0,
+	PANEL_REG_ID_VCI,
+	PANEL_REG_ID_VDDI,
+	PANEL_REG_ID_VDDD,
+	PANEL_REG_ID_VDDR_EN,
+	PANEL_REG_ID_VDDR,
+	PANEL_REG_ID_MAX,
+};
+
+struct panel_reg_ctrl {
+	enum panel_reg_id id;
+	u32 post_delay_ms;
+};
+#define IS_VALID_PANEL_REG_ID(id) \
+	(((id) > PANEL_REG_ID_INVALID) && ((id) < PANEL_REG_ID_MAX))
+#define PANEL_REG_COUNT (PANEL_REG_ID_MAX - 1)
+
 struct exynos_panel_desc {
 	const u8 *dsc_pps;
 	u8 panel_id_reg;
@@ -504,14 +663,32 @@ struct exynos_panel_desc {
 	u32 min_brightness;
 	u32 lower_min_brightness; /* extreme low brightness */
 	u32 dft_brightness; /* default brightness */
-	u32 vrr_switch_duration;
+	u32 rr_switch_duration;
 	/* extra frame is needed to apply brightness change if it's not at next VSYNC */
 	bool dbv_extra_frame;
 	bool is_partial;
 	bool is_panel_idle_supported;
-	bool no_lhbm_rr_constraints;
+	bool refresh_on_lp;
+	/**
+	 * set true if the panel doesn't have lhbm common hw constraints, include
+	 * 1. only allow turn on lhbm at peak refresh rate
+	 *    - `freq set` may set to peak when enabling lhbm cause underrun at
+	 *      non-peak refresh rate.
+	 *    - abnormal display (like green tint) when enabling lhbm at non-peak
+	 *      refresh rate.
+	 * 2. not allow switch refresh rate when lhbm is on
+	 *    - if `freq set` is changed when lhbm is on, lhbm may not work normally.
+	 */
+	const bool no_lhbm_rr_constraints;
+	/* schedule sysfs_notify in workq */
+	const bool use_async_notify;
+	const u32 lhbm_post_cmd_delay_frames;
 	const u32 lhbm_effective_delay_frames;
-	const unsigned int delay_dsc_reg_init_us;
+	/**
+	 * Indicate how many frames are needed at least before sending lhbm on commands
+	 * while exiting from AoD mode. Default 0 means no such constraint.
+	 */
+	const u32 lhbm_on_delay_frames;
 	const struct brightness_capability *brt_capability;
 	const u32 *bl_range;
 	u32 bl_num_ranges;
@@ -532,10 +709,26 @@ struct exynos_panel_desc {
 	const size_t num_binned_lp;
 	const struct drm_panel_funcs *panel_func;
 	const struct exynos_panel_funcs *exynos_panel_func;
+	const int reset_timing_ms[PANEL_RESET_TIMING_COUNT];
+	const struct panel_reg_ctrl reg_ctrl_enable[PANEL_REG_COUNT];
+	const struct panel_reg_ctrl reg_ctrl_post_enable[PANEL_REG_COUNT];
+	const struct panel_reg_ctrl reg_ctrl_pre_disable[PANEL_REG_COUNT];
+	const struct panel_reg_ctrl reg_ctrl_disable[PANEL_REG_COUNT];
+	const u32 normal_mode_work_delay_ms;
+	/* Panel ready timeout */
+	unsigned int rdy_timeout_ms;
+	/* DSI HS clock (megabits per second) */
+	const u32 default_dsi_hs_clk_mbps;
+	/* Set true if need to keep ATC on while switching op_hz if it's already on */
+	const bool keep_atc_on_for_op;
+	/* list of revision of this panel */
+	const size_t num_module_ids;
+	const struct panel_module_id_info *module_ids;
 };
 
 #define PANEL_ID_MAX		40
 #define PANEL_EXTINFO_MAX	16
+#define PANEL_MODEL_MAX		14
 #define LOCAL_HBM_MAX_TIMEOUT_MS 3000 /* 3000 ms */
 #define LOCAL_HBM_GAMMA_CMD_SIZE_MAX 16
 
@@ -580,6 +773,13 @@ struct te2_data {
 	enum exynos_panel_te2_opt option;
 };
 
+struct ready_signal_t {
+	int gpio;
+	int irq;
+	enum of_gpio_flags gpio_flags;
+	struct completion detected;
+};
+
 enum display_state {
 	DISPLAY_STATE_ON,
 	DISPLAY_STATE_HBM,
@@ -619,22 +819,33 @@ struct notify_state_change {
 	bool abort_suspend;
 };
 
+struct panel_module_id_info {
+	u32 module_id;
+	u32 revision;
+};
+
 struct exynos_panel {
 	struct device *dev;
 	struct drm_panel panel;
+	struct drm_crtc *crtc;
 	struct gpio_desc *reset_gpio;
 	struct gpio_desc *enable_gpio;
 	struct regulator *vci;
 	struct regulator *vddi;
 	struct regulator *vddd;
+	struct gpio_desc *vddd_gpio;
 	struct regulator *vddr_en;
 	struct regulator *vddr;
+	enum gpio_level vddd_gpio_fixed_level;
 	u32 vddd_normal_uV;
 	u32 vddd_lp_uV;
 	struct exynos_drm_connector exynos_connector;
 	struct drm_bridge bridge;
 	const struct exynos_panel_desc *desc;
 	const struct exynos_panel_mode *current_mode;
+
+	/* Detect panel ready */
+	struct ready_signal_t ready_signal;
 
 	/* Deprected: please refer to panel_state instead */
 	bool enabled;
@@ -653,6 +864,10 @@ struct exynos_panel {
 	bool self_refresh_active;
 	/* indicates if panel brightness is set or not after reset */
 	bool is_brightness_initialized;
+	/* indicates need to adjust vddd lp in self refresh */
+	bool need_post_vddd_lp;
+	/* adjust lp vddd in self refresh instead of mode set */
+	bool post_vddd_lp;
 	/**
 	 * refresh rate in panel idle mode
 	 * 0 means not in idle mode or not specified
@@ -669,21 +884,31 @@ struct exynos_panel {
 	 */
 	int min_vrefresh;
 	/**
+	 * indicates the supported max refresh rate in the panel.
+	 */
+	int peak_vrefresh;
+	/**
+	 * indicates the supported max bts fps in the panel.
+	 */
+	int peak_bts_fps;
+
+	/**
 	 * When the value is set to non-zero value, the panel
 	 * driver kernel idle timer will be disabled internally
 	 * (similar to writing 0 to panel_idle sysfs node) for
 	 * at least the delay time provided after a refresh rate update.
 	 */
 	u32 idle_delay_ms;
-	int peak_vrefresh;
 
 	enum exynos_hbm_mode hbm_mode;
 	bool dimming_on;
+	bool ssc_en;
 	/* indicates the LCD backlight is controlled by DCS */
 	bool bl_ctrl_dcs;
 	enum exynos_cabc_mode cabc_mode;
 	struct backlight_device *bl;
 	struct mutex mode_lock;
+	struct mutex crtc_lock;
 	struct mutex bl_state_lock;
 	struct exynos_bl_notifier bl_notifier;
 
@@ -693,8 +918,12 @@ struct exynos_panel {
 
 	char panel_id[PANEL_ID_MAX];
 	char panel_extinfo[PANEL_EXTINFO_MAX];
+	char panel_model[PANEL_MODEL_MAX];
 	u32 panel_rev;
 	enum drm_panel_orientation orientation;
+
+	/** @panel_index: indicates primary or secondary panel */
+	int panel_index;
 
 	struct device_node *touch_dev;
 
@@ -705,17 +934,16 @@ struct exynos_panel {
 	ktime_t last_panel_idle_set_ts;
 	struct delayed_work idle_work;
 
-	/* Record the current CABC mode if force_off enabled */
-	enum exynos_cabc_mode current_cabc_mode;
-
 	/* use for notify state changed */
 	bool allow_wakeup_by_state_change;
 	struct notify_state_change notify_panel_mode_changed;
 	struct work_struct notify_brightness_changed_work;
+	enum display_state notified_power_state;
 
 	/* use for display stats residence */
 	struct display_stats disp_stats;
 
+	struct blocking_notifier_head notifier_head;
 	/**
 	 * Record the last refresh rate switch. Note the mode switch doesn't
 	 * mean rr switch so it differs from last_mode_set_ts
@@ -730,12 +958,16 @@ struct exynos_panel {
 	/* TE width before last rr command was sent */
 	u32 last_rr_te_usec;
 
+	/* Automatic Current Limiting(ACL) */
+	enum exynos_acl_mode acl_mode;
+
 	struct {
 		struct local_hbm {
 			bool gamma_para_ready;
 			u8 gamma_cmd[LOCAL_HBM_GAMMA_CMD_SIZE_MAX];
+			enum local_hbm_enable_state requested_state;
 			union {
-				enum local_hbm_enable_state state;
+				enum local_hbm_enable_state effective_state;
 				enum local_hbm_enable_state enabled;
 			};
 			/* max local hbm on period in ms */
@@ -747,13 +979,29 @@ struct exynos_panel {
 			struct kthread_work post_work;
 			ktime_t en_cmd_ts;
 			ktime_t next_vblank_ts;
+			u32 frame_index;
+			ktime_t last_vblank_ts;
+			bool post_work_disabled;
+			u64 last_lp_vblank_cnt;
 		} local_hbm;
 
 		struct workqueue_struct *wq;
 	} hbm;
 
+	u32 error_count_te;
+	u32 error_count_unknown;
+
+	u32 normal_mode_work_delay_ms;
+	struct delayed_work normal_mode_work;
+
 	/* current type of mode switch */
 	enum mode_progress_type mode_in_progress;
+	/* indicates BTS raise due to op_hz switch */
+	bool boosted_for_op_hz;
+	/* indicated whether ATC needs to be enabled */
+	bool atc_need_enabled;
+	/* current MIPI DSI HS clock (megabits per second) */
+	u32 dsi_hs_clk_mbps;
 };
 
 /**
@@ -853,11 +1101,6 @@ static inline ssize_t exynos_get_te2_type_len(struct exynos_panel *ctx, bool lp_
 		ctx->desc->num_modes);
 }
 
-static inline void te2_state_changed(struct backlight_device *bl)
-{
-	sysfs_notify(&bl->dev.kobj, NULL, "te2_state");
-}
-
 static inline void notify_panel_mode_changed(struct exynos_panel *ctx, bool abort_suspend)
 {
 	ctx->notify_panel_mode_changed.abort_suspend = abort_suspend;
@@ -871,12 +1114,20 @@ static inline u32 get_current_frame_duration_us(struct exynos_panel *ctx)
 
 static inline bool is_local_hbm_post_enabling_supported(struct exynos_panel *ctx)
 {
-	return (ctx->desc && ctx->desc->lhbm_effective_delay_frames);
+	return (!ctx->hbm.local_hbm.post_work_disabled && ctx->desc &&
+		(ctx->desc->lhbm_effective_delay_frames ||
+		 (ctx->desc->lhbm_post_cmd_delay_frames &&
+		  ctx->desc->exynos_panel_func->set_local_hbm_mode_post)));
 }
 
 static inline bool is_local_hbm_disabled(struct exynos_panel *ctx)
 {
-	return (ctx->hbm.local_hbm.state == LOCAL_HBM_DISABLED);
+	return (ctx->hbm.local_hbm.effective_state == LOCAL_HBM_DISABLED);
+}
+
+static inline bool is_vrr_mode(const struct exynos_panel_mode *pmode)
+{
+	return (pmode->mode.vscan > 0);
 }
 
 #define EXYNOS_DSI_CMD_REV(cmd, delay, rev) { sizeof(cmd), cmd, delay, (u32)rev }
@@ -922,47 +1173,47 @@ static inline bool is_local_hbm_disabled(struct exynos_panel *ctx)
 		DUMP_PREFIX_NONE, 16, 1, cmd, len, false);	\
 } while (0)
 
-#define EXYNOS_DCS_WRITE_SEQ(ctx, seq...) do {				\
-	u8 d[] = { seq };						\
-	int ret;							\
-	ret = exynos_dcs_write(ctx, d, ARRAY_SIZE(d));			\
-	if (ret < 0)							\
-		EXYNOS_DCS_WRITE_PRINT_ERR(ctx, d, ARRAY_SIZE(d), ret);	\
-} while (0)
-
-#define EXYNOS_DCS_WRITE_SEQ_FLAGS(ctx, flags, seq...) do {				\
+#define EXYNOS_DCS_WRITE_SEQ_FLAGS(ctx, flags, seq...) do {		\
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);	\
 	u8 d[] = { seq };						\
 	int ret;							\
-	ret = exynos_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d), flags);		\
+	ret = exynos_dsi_dcs_write_buffer(dsi, d, ARRAY_SIZE(d), flags);\
 	if (ret < 0)							\
 		EXYNOS_DCS_WRITE_PRINT_ERR(ctx, d, ARRAY_SIZE(d), ret);	\
 } while (0)
 
 #define EXYNOS_DCS_WRITE_SEQ_DELAY(ctx, delay, seq...) do {		\
-	EXYNOS_DCS_WRITE_SEQ(ctx, seq);					\
-	usleep_range(delay * 1000, delay * 1000 + 10);			\
+	u8 d[] = { seq };						\
+	int ret;							\
+	ret = exynos_dcs_write_delay(ctx, d, ARRAY_SIZE(d), delay);	\
+	if (ret < 0)							\
+		EXYNOS_DCS_WRITE_PRINT_ERR(ctx, d, ARRAY_SIZE(d), ret);	\
+	else if (delay > 0)						\
+		usleep_range(delay * 1000, delay * 1000 + 10);		\
 } while (0)
 
-#define EXYNOS_DCS_WRITE_TABLE(ctx, table) do {					\
+#define EXYNOS_DCS_WRITE_SEQ(ctx, seq...) \
+	EXYNOS_DCS_WRITE_SEQ_DELAY(ctx, 0, seq)
+
+#define EXYNOS_DCS_WRITE_TABLE_FLAGS(ctx, table, flags) do {			\
+	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);		\
 	int ret;								\
-	ret = exynos_dcs_write(ctx, table, ARRAY_SIZE(table));			\
+	ret = exynos_dsi_dcs_write_buffer(dsi, table, ARRAY_SIZE(table), flags);\
 	if (ret < 0)								\
 		EXYNOS_DCS_WRITE_PRINT_ERR(ctx, table, ARRAY_SIZE(table), ret);	\
 } while (0)
 
-#define EXYNOS_DCS_WRITE_TABLE_FLAGS(ctx, table, flags) do {					\
-	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);	\
+#define EXYNOS_DCS_WRITE_TABLE_DELAY(ctx, delay, table) do {			\
 	int ret;								\
-	ret = exynos_dsi_dcs_write_buffer(dsi, table, ARRAY_SIZE(table), flags);		\
+	ret = exynos_dcs_write_delay(ctx, table, ARRAY_SIZE(table), delay);	\
 	if (ret < 0)								\
 		EXYNOS_DCS_WRITE_PRINT_ERR(ctx, table, ARRAY_SIZE(table), ret);	\
+	else if (delay > 0)							\
+		usleep_range(delay * 1000, delay * 1000 + 10);			\
 } while (0)
 
-#define EXYNOS_DCS_WRITE_TABLE_DELAY(ctx, delay, table) do {		\
-	EXYNOS_DCS_WRITE_TABLE(ctx, table);				\
-	usleep_range(delay * 1000, delay * 1000 + 10);			\
-} while (0)
+#define EXYNOS_DCS_WRITE_TABLE(ctx, table) \
+	EXYNOS_DCS_WRITE_TABLE_DELAY(ctx, 0, table)
 
 #define EXYNOS_DCS_BUF_ADD(ctx, seq...) \
 	EXYNOS_DCS_WRITE_SEQ_FLAGS(ctx, EXYNOS_DSI_MSG_QUEUE, seq)
@@ -1016,6 +1267,8 @@ ssize_t exynos_panel_get_te2_edges(struct exynos_panel *ctx,
 				   char *buf, bool lp_mode);
 int exynos_panel_get_current_mode_te2(struct exynos_panel *ctx,
 				      struct exynos_panel_te2_timing *timing);
+const struct exynos_panel_mode *exynos_panel_get_mode(struct exynos_panel *ctx,
+				const struct drm_display_mode *mode);
 int exynos_panel_get_modes(struct drm_panel *panel, struct drm_connector *connector);
 int exynos_panel_disable(struct drm_panel *panel);
 int exynos_panel_unprepare(struct drm_panel *panel);
@@ -1023,16 +1276,23 @@ int exynos_panel_prepare(struct drm_panel *panel);
 int exynos_panel_read_id(struct exynos_panel *ctx);
 int exynos_panel_read_ddic_id(struct exynos_panel *ctx);
 void exynos_panel_get_panel_rev(struct exynos_panel *ctx, u8 rev);
+void exynos_panel_get_revision_by_module_ids(struct exynos_panel *ctx, u32 module_id);
+void exynos_panel_model_init(struct exynos_panel *ctx, const char* project, u8 extra_info);
 int exynos_panel_init(struct exynos_panel *ctx);
-void exynos_panel_reset(struct exynos_panel *ctx);
+int exynos_panel_reset(struct exynos_panel *ctx);
 int exynos_panel_set_power(struct exynos_panel *ctx, bool on);
+int exynos_panel_init_brightness(struct exynos_panel_desc *desc,
+				const struct exynos_brightness_configuration *configs,
+				u32 num_configs, u32 panel_rev);
 int exynos_panel_set_brightness(struct exynos_panel *exynos_panel, u16 br);
+u16 exynos_panel_get_brightness(struct exynos_panel *exynos_panel);
 void exynos_panel_debugfs_create_cmdset(struct exynos_panel *ctx,
 					struct dentry *parent,
 					const struct exynos_dsi_cmd_set *cmdset,
 					const char *name);
 void exynos_panel_send_cmd_set_flags(struct exynos_panel *ctx, const struct exynos_dsi_cmd_set *cmd_set,
 			       u32 flags);
+inline void exynos_panel_msleep(u32 delay_ms);
 static inline void exynos_panel_send_cmd_set(struct exynos_panel *ctx,
 					     const struct exynos_dsi_cmd_set *cmd_set)
 {
@@ -1042,12 +1302,17 @@ void exynos_panel_set_lp_mode(struct exynos_panel *ctx, const struct exynos_pane
 void exynos_panel_set_binned_lp(struct exynos_panel *ctx, const u16 brightness);
 int exynos_panel_common_init(struct mipi_dsi_device *dsi,
 				struct exynos_panel *ctx);
+int exynos_dcs_write_delay(struct exynos_panel *ctx, const void *data, size_t len,
+			   u32 delay_ms);
 ssize_t exynos_dsi_dcs_write_buffer(struct mipi_dsi_device *dsi,
 				const void *data, size_t len, u16 flags);
 ssize_t exynos_dsi_cmd_send_flags(struct mipi_dsi_device *dsi, u16 flags);
 
 int exynos_panel_probe(struct mipi_dsi_device *dsi);
 void exynos_panel_remove(struct mipi_dsi_device *dsi);
+
+int exynos_panel_register_notifier(struct drm_connector *connector, struct notifier_block *nb);
+int exynos_panel_unregister_notifier(struct drm_connector *connector, struct notifier_block *nb);
 
 static inline void exynos_dsi_dcs_write_buffer_force_batch_begin(struct mipi_dsi_device *dsi)
 {

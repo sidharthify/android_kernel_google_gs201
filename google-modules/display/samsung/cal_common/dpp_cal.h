@@ -18,11 +18,14 @@
 
 #include "../exynos_drm_format.h"
 
-#ifdef CONFIG_SOC_GS201
-/* RDMA + ODMA + RCD */
+#if defined(CONFIG_SOC_ZUMA)
+/* 14xRDMA + 2xODMA + 2xRCD + 2xCGC*/
+#define MAX_DPP_CNT		20
+#elif defined(CONFIG_SOC_GS201)
+/* 6xRDMA + 1xODMA + 2xRCD */
 #define MAX_DPP_CNT		9
 #else
-/* RDMA + ODMA */
+/* 6xRDMA + 1xODMA */
 #define MAX_DPP_CNT		7
 #endif
 
@@ -56,9 +59,10 @@ enum dpp_attr {
 	DPP_ATTR_IDMA		= 16,
 	DPP_ATTR_ODMA		= 17,
 	DPP_ATTR_DPP		= 18,
-	DPP_ATTR_WBMUX          = 19,
-
+	DPP_ATTR_SRAMC		= 19,
 	DPP_ATTR_RCD		= 20,
+	DPP_ATTR_SCL_COEF	= 21,
+	DPP_ATTR_HDR_COMM	= 22,
 };
 
 enum dpp_csc_defs {
@@ -83,6 +87,12 @@ enum dpp_comp_type {
 	COMP_TYPE_SBWC,
 };
 
+enum dpp_afbc_blk_size {
+	AFBC_BLK_16x16 = 0,
+	AFBC_BLK_32x8,
+	AFBC_BLK_64x4,
+};
+
 enum dpp_sbwc_blk_size {
 	SBWC_BLK_32x2 = 2,
 	SBWC_BLK_32x3 = 3,
@@ -94,10 +104,38 @@ enum dpp_sbwc_blk_size {
 struct dpp_regs {
 	void __iomem *dpp_base_regs;
 	void __iomem *dma_base_regs;
+	void __iomem *scl_coef_base_regs;
+	void __iomem *sramc_base_regs;
 	void __iomem *hdr_base_regs;
+	void __iomem *hdr_comm_base_regs;
 	void __iomem *rcd_base_regs;
 };
 
+#ifdef CONFIG_SOC_ZUMA
+enum dpp_regs_id {
+	REGS_DPP0_ID = 0,
+	REGS_DPP1_ID,
+	REGS_DPP2_ID,
+	REGS_DPP3_ID,
+	REGS_DPP4_ID,
+	REGS_DPP5_ID,
+	REGS_DPP6_ID,
+	REGS_DPP7_ID,
+	REGS_DPP8_ID,
+	REGS_DPP9_ID,
+	REGS_DPP10_ID,
+	REGS_DPP11_ID,
+	REGS_DPP12_ID,
+	REGS_DPP13_ID,
+	REGS_RCD0_ID,
+	REGS_RCD1_ID,
+	REGS_WB0_ID,
+	REGS_WB1_ID,
+	REGS_CGC0_ID,
+	REGS_CGC1_ID,
+	REGS_DPP_ID_MAX
+};
+#else
 enum dpp_regs_id {
 	REGS_DPP0_ID = 0,
 	REGS_DPP1_ID,
@@ -112,10 +150,14 @@ enum dpp_regs_id {
 	REGS_CGC1_ID,
 	REGS_DPP_ID_MAX
 };
+#endif
 
 enum dpp_regs_type {
 	REGS_DMA = 0,
 	REGS_DPP,
+	REGS_SRAMC,
+	REGS_SCL_COEF,
+	REGS_HDR_COMM,
 	REGS_DPP_TYPE_MAX
 };
 
@@ -205,6 +247,7 @@ struct dpp_params_info {
 	u32 c_hd_stride;    /* Chrominance header stride */
 	u32 c_pl_stride;    /* Chrominance payload stride */
 
+	bool is_scale;
 	bool is_block;
 	u32 format;
 	dma_addr_t addr[MAX_PLANE_ADDR_CNT];
@@ -218,9 +261,31 @@ struct dpp_params_info {
 
 	unsigned long rcv_num;
 	enum dpp_comp_type comp_type;
-	enum dpp_sbwc_blk_size blk_size;
+	u32 blk_size;
 	bool is_lossy;
 };
+
+#if defined(CONFIG_SOC_GS201) || defined(CONFIG_SOC_ZUMA)
+void rcd_reg_init(u32 id);
+int rcd_reg_deinit(u32 id, bool reset, const unsigned long attr);
+void rcd_reg_configure_params(u32 id, struct dpp_params_info *p,
+		const unsigned long attr);
+#else
+static inline void rcd_reg_init(u32 id) {return;}
+static inline int rcd_reg_deinit(u32 id, bool reset, const unsigned long attr) {return 0;}
+static inline void rcd_reg_configure_params(u32 id, struct dpp_params_info *p,
+		const unsigned long attr) {return;}
+#endif
+
+#if defined(CONFIG_SOC_GS201) || defined(CONFIG_SOC_ZUMA)
+u32 cgc_reg_get_irq_and_clear_internal(u32 id);
+void cgc_reg_set_cgc_start_internal(u32 id);
+void cgc_reg_set_config_internal(u32 id, bool en, dma_addr_t addr);
+#else
+static inline u32 cgc_reg_get_irq_and_clear_internal(u32 id) {return 0;}
+static inline void cgc_reg_set_cgc_start_internal(u32 id) {return;}
+static inline void cgc_reg_set_config_internal(u32 id, bool en, dma_addr_t addr) {return;}
+#endif
 
 void dpp_regs_desc_init(void __iomem *regs, phys_addr_t start, const char *name,
 		enum dpp_regs_type type, unsigned int id);
@@ -231,14 +296,29 @@ int dpp_reg_deinit(u32 id, bool reset, const unsigned long attr);
 void dpp_reg_configure_params(u32 id, struct dpp_params_info *p,
 		const unsigned long attr);
 
+void dma_reg_dump_com_debug_regs(struct drm_printer *p, int id);
+void rcd_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs);
+void cgc_dma_dump_regs(struct drm_printer *p, u32 id, void __iomem *dma_regs);
+
 /* DPU_DMA, DPP DEBUG */
 void __dpp_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
+		void __iomem *sramc_regs, void __iomem *hdr_comm_regs, void __iomem *hdr_regs,
 		unsigned long attr);
 
-void __rcd_dump(struct drm_printer *p, u32 id, void __iomem *regs, void __iomem *dma_regs,
-		unsigned long attr);
+static inline void
+ __rcd_dump(struct drm_printer *p, u32 id, void __iomem *regs,
+	    void __iomem *dma_regs, unsigned long attr)
+{
+	dma_reg_dump_com_debug_regs(p, id);
 
-void __cgc_dump(struct drm_printer *p, u32 id, void __iomem *dma_regs);
+	rcd_dma_dump_regs(p, id, dma_regs);
+}
+
+static inline void
+__cgc_dump(struct drm_printer *p, u32 id, void __iomem *dma_regs)
+{
+	cgc_dma_dump_regs(p, id, dma_regs);
+}
 
 /* DPP hw limitation check */
 int __dpp_check(u32 id, const struct dpp_params_info *p, unsigned long attr);
@@ -247,9 +327,19 @@ int __dpp_check(u32 id, const struct dpp_params_info *p, unsigned long attr);
 u32 dpp_reg_get_irq_and_clear(u32 id);
 u32 idma_reg_get_irq_and_clear(u32 id);
 u32 odma_reg_get_irq_and_clear(u32 id);
-u32 cgc_reg_get_irq_and_clear(u32 id);
-void cgc_reg_set_config(u32 id, bool en, dma_addr_t addr);
-void cgc_reg_set_cgc_start(u32 id);
+
+static inline u32 cgc_reg_get_irq_and_clear(u32 id)
+{
+	return cgc_reg_get_irq_and_clear_internal(id);
+}
+static inline void cgc_reg_set_config(u32 id, bool en, dma_addr_t addr)
+{
+	cgc_reg_set_config_internal(id, en, addr);
+}
+static inline void cgc_reg_set_cgc_start(u32 id)
+{
+	cgc_reg_set_cgc_start_internal(id);
+}
 
 void dma_reg_get_shd_addr(u32 id, u32 shd_addr[], const unsigned long attr);
 bool dma_reg_is_mst_security_enabled(u32 id, u32 *out_mst_security);

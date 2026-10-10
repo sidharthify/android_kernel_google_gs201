@@ -23,7 +23,9 @@
 #include <video/videomode.h>
 
 #include <dsim_cal.h>
-
+#if IS_ENABLED(CONFIG_DSIM_LOGBUFF)
+#include <misc/logbuffer.h>
+#endif
 #include "exynos_drm_drv.h"
 
 enum dsim_state {
@@ -52,6 +54,11 @@ struct dsim_pll_features {
 	u32 k_bits;
 };
 
+struct dsim_allowed_hs_clks {
+	unsigned int num_clks;
+	u32 *hs_clks;
+};
+
 struct dsim_pll_params {
 	unsigned int num_modes;
 	struct dsim_pll_param **params;
@@ -74,11 +81,12 @@ struct dsim_device {
 	struct drm_bridge *panel_bridge;
 	struct mipi_dsi_device *dsi_device;
 	struct device_link *dev_link;
+	bool encoder_initialized;
 
 	enum exynos_drm_output_type output_type;
 	int te_from;
 	int te_gpio;
-	int err_fg_gpio;
+	int tout_gpio;
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *te_on;
 	struct pinctrl_state *te_off;
@@ -88,13 +96,18 @@ struct dsim_device {
 	struct clk **clks;
 	struct dsim_pll_params *pll_params;
 
+	struct dsim_allowed_hs_clks *allowed_hs_clks;
+	bool force_set_hs_clk;
+
 #ifdef CONFIG_DEBUG_FS
         struct dentry *debugfs_entry;
 #endif
 
 	int irq;
-	int irq_err_fg;
 	int id;
+	u32 panel_id;
+	/** @panel_index: 0 primary, 1 secondary */
+	int panel_index;
 	spinlock_t slock;
 	struct mutex cmd_lock;
 	struct mutex state_lock;
@@ -117,18 +130,44 @@ struct dsim_device {
 	int idle_ip_index;
 	u8 total_pend_ph;
 	u16 total_pend_pl;
+	u32 tx_delay_ms;
 	/* override message flag ~EXYNOS_DSI_MSG_QUEUE */
 	bool force_batching;
-
+#if IS_ENABLED(CONFIG_DSIM_LOGBUFF)
+	struct logbuffer *log;
+#endif
 	enum dsim_dual_dsi dual_dsi;
 };
 
 extern struct dsim_device *dsim_drvdata[MAX_DSI_CNT];
 
+/**
+ * struct dsim_connector_funcs - Abstraction of connector-aware funcs
+ * @atomic_check: Checking validity of mode change
+ * @atomic_mode_set: Sets mode
+ * @set_state_recovering: Sets connector state to reflect recovery
+ * @update_config_for_mode: Updates dsim_reg to match mode
+ * @update_hs_clk: Updates HS clock for panel usage
+ */
+struct dsim_connector_funcs {
+	int (*atomic_check)(const struct dsim_device *dsim, struct drm_crtc_state *crtc_state,
+			    struct drm_connector_state *conn_state);
+	void (*atomic_mode_set)(struct dsim_device *dsim, struct drm_crtc_state *crtc_state,
+				struct drm_connector_state *conn_state);
+	void (*set_state_recovering)(struct drm_connector_state *conn_state);
+	void (*update_config_for_mode)(struct dsim_reg_config *config,
+				       const struct drm_display_mode *mode,
+				       const struct drm_connector_state *conn_state);
+	void (*update_hs_clk)(struct dsim_device *dsim, struct drm_connector_state *conn_state);
+};
+struct dsim_connector_funcs *get_connector_funcs(const struct drm_connector_state *conn_state);
+
 #define encoder_to_dsim(e) container_of(e, struct dsim_device, encoder)
+#define host_to_dsi(host) container_of(host, struct dsim_device, dsi_host)
 
 #define MIPI_WR_TIMEOUT				msecs_to_jiffies(80)
 #define MIPI_RD_TIMEOUT				msecs_to_jiffies(100)
+#define INVALID_PANEL_ID			0xFFFFFFFF
 
 struct decon_device;
 
@@ -155,6 +194,8 @@ dsim_get_decon(const struct dsim_device *dsim)
 
 	if (dsim->dual_dsi == DSIM_DUAL_DSI_SEC) {
 		main_dsi = exynos_get_dual_dsi(DSIM_DUAL_DSI_MAIN);
+		if (!main_dsi)
+			return NULL;
 		crtc = main_dsi->encoder.crtc;
 	}
 
@@ -163,6 +204,10 @@ dsim_get_decon(const struct dsim_device *dsim)
 
 	return to_exynos_crtc(crtc)->ctx;
 }
+
+void dsim_dump(struct dsim_device *dsim, struct drm_printer *p);
+
+inline void dsim_trace_msleep(u32 delay_ms);
 
 #ifdef CONFIG_DEBUG_FS
 void dsim_diag_create_debugfs(struct dsim_device *dsim);

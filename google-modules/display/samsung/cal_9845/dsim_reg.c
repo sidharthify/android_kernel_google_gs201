@@ -18,7 +18,6 @@
 #include "regs-dsim.h"
 #include <dsim_cal.h>
 #include <cal_config.h>
-#include <soc/google/debug-snapshot.h>
 
 static struct cal_regs_desc regs_desc[REGS_DSIM_TYPE_MAX][MAX_DSI_CNT];
 
@@ -90,6 +89,10 @@ static struct cal_regs_desc regs_desc[REGS_DSIM_TYPE_MAX][MAX_DSI_CNT];
 #define PLL_LOCK_CNT_MARGIN_RATIO	0	/* 10% ~ 20% */
 #define PLL_LOCK_CNT_MARGIN		(PLL_LOCK_CNT_MUL *	\
 					PLL_LOCK_CNT_MARGIN_RATIO / 100)
+
+#if !defined(CONFIG_BOARD_EMULATOR)
+static DEFINE_MUTEX(dphy_lock);
+#endif
 
 static const u32 DSIM_PHY_BIAS_CON_VAL[] = {
 	0x00000010,
@@ -781,11 +784,8 @@ static int dsim_reg_enable_pll(u32 id, u32 en)
 
 	dsim_reg_set_pll(id, en);
 	if (en ^ dsim_reg_get_pll_en(id)) {
-		char dsim_msg[40];
-
-		scnprintf(dsim_msg, sizeof(dsim_msg),
-			"dsim%u: PLL_EN is not %sable\n", id, en ? "en" : "dis");
-		dbg_snapshot_emergency_reboot(dsim_msg);
+		WARN(1, "dsim%u: PLL_EN is not %s\n",
+				id, en ? "enable" : "disable");
 		return -EINVAL;
 	}
 	ret = readl_poll_timeout_atomic(
@@ -2099,6 +2099,7 @@ void dsim_reg_init(u32 id, struct dsim_reg_config *config,
 	dsim_reg_enable_word_clock(id, 1);
 
 #if !defined(CONFIG_BOARD_EMULATOR)
+	mutex_lock(&dphy_lock);
 	/* Enable DPHY reset : DPHY reset start */
 	dpu_sysreg_dphy_reset(id, 0);
 #endif
@@ -2107,6 +2108,7 @@ void dsim_reg_init(u32 id, struct dsim_reg_config *config,
 	dsim_reg_set_clocks(id, config, clks, 1);
 	dsim_reg_set_lanes_dphy(id, lanes, true);
 	dpu_sysreg_dphy_reset(id, 1); /* Release DPHY reset */
+	mutex_unlock(&dphy_lock);
 #endif
 
 	dsim_reg_set_link_clock(id, 1);	/* Selection to word clock */
@@ -2171,8 +2173,8 @@ int dsim_reg_stop(u32 id, u32 lanes)
 	return err;
 }
 
-/* Update DSIM reg for vrr changed */
-void dsim_reg_set_vrr_config(u32 id, const struct dsim_reg_config *config,
+/* Update DSIM reg for rr changed */
+void dsim_reg_set_rr_config(u32 id, const struct dsim_reg_config *config,
 		struct dsim_clks *clks)
 {
 	int idx;
@@ -2503,7 +2505,7 @@ static void __dphy_dump(struct drm_printer *p, u32 id, struct dsim_regs *regs)
 	dpu_print_hex_dump(p, regs->phy_regs, regs->phy_regs + 0x06C0, 0x20);
 }
 #else
-static inline void __dphy_dump(u32 id, struct dsim_regs *regs) { }
+static inline void __dphy_dump(struct drm_printer *p, u32 id, struct dsim_regs *regs) { }
 #endif
 
 void __dsim_dump(struct drm_printer *p, u32 id, struct dsim_regs *regs)
