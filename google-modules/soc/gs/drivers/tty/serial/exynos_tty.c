@@ -2503,7 +2503,7 @@ bool exynos_uart_console_enabled(void)
 
 	list_for_each_entry(ourport, &drvdata_list, node) {
 		port = &ourport->port;
-		if (uart_console_enabled(port))
+		if (uart_console_registered(port))
 			return true;
 	}
 	return false;
