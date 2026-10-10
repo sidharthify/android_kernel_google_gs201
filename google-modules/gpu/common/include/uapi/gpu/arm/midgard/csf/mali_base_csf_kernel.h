@@ -87,6 +87,15 @@
  */
 #define BASEP_KCPU_CQS_MAX_NUM_OBJS ((size_t)32)
 
+/* Minimum number of queue group supported by the GPU */
+#define BASEP_QUEUE_GROUP_MIN 1
+/* Maximum number of queue group supported by the GPU */
+#define BASEP_QUEUE_GROUP_MAX 31
+/* Minimum number of GPU queues per queue groups supported by the driver */
+#define BASEP_GPU_QUEUE_PER_QUEUE_GROUP_MIN 8
+/* Maximum number of GPU queues per queue groups supported by the driver */
+#define BASEP_GPU_QUEUE_PER_QUEUE_GROUP_MAX 32
+
 /* CSF CSI EXCEPTION_HANDLER_FLAGS */
 #define BASE_CSF_TILER_OOM_EXCEPTION_FLAG (1u << 0)
 #define BASE_CSF_EXCEPTION_HANDLER_FLAGS_MASK (BASE_CSF_TILER_OOM_EXCEPTION_FLAG)
@@ -402,7 +411,7 @@ struct basep_cs_group_control {
 struct base_gpu_queue_group_error_fatal_payload {
 	__u64 sideband;
 	__u32 status;
-	__u32 padding;
+	__u8 padding[20];
 };
 
 /**
@@ -421,7 +430,18 @@ struct base_gpu_queue_error_fatal_payload {
 	__u64 sideband;
 	__u32 status;
 	__u8 csi_index;
-	__u8 padding[3];
+	__u8 padding[6];
+	/**
+	 * @has_extra: Set to 0x1 (true) when the extra trace data is filled,
+	 * otherwise 0 (false)
+	 */
+	__u8 has_extra;
+	/** @trace_id0: The extra EXCEPTION_TRACE_ID0 value */
+	__u32 trace_id0;
+	/** @trace_id1: The extra EXCEPTION_TRACE_ID1 value */
+	__u32 trace_id1;
+	/** @trace_task: The extra EXCEPTION_TRACE_TASK value */
+	__u32 trace_task;
 };
 
 /**
@@ -435,12 +455,21 @@ struct base_gpu_queue_error_fatal_payload {
  *                INSTR_INVALID_PC (0x50).
  * @csi_index:    Index of the CSF interface the queue is bound to.
  * @padding:      Padding to make multiple of 64bits
+ * @has_extra:    Set to 0x1 (true) when the extra trace data is filled,
+ *                otherwise 0 (false)
+ * @trace_id0:    The extra EXCEPTION_TRACE_ID0 value.
+ * @trace_id1:    The extra EXCEPTION_TRACE_ID1 value.
+ * @trace_task:   The extra EXCEPTION_TRACE_TASK value.
  */
 struct base_gpu_queue_error_fault_payload {
 	__u64 sideband;
 	__u32 status;
 	__u8 csi_index;
-	__u8 padding[3];
+	__u8 padding[6];
+	__u8 has_extra;
+	__u32 trace_id0;
+	__u32 trace_id1;
+	__u32 trace_task;
 };
 
 /**
