@@ -1,0 +1,3 @@
+# When adding new entries keep the list in alphabetical order
+CFLAGS_odpm.o += -Wno-missing-prototypes
+obj-$(CONFIG_ODPM) += odpm.o

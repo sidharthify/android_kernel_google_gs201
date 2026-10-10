@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Makefile for misc devices that really don't fit anywhere else.
+#
+
+CFLAGS_logbuffer.o += -Wno-missing-prototypes
+
+obj-$(CONFIG_GSC_TPM)		+= gsc-spi.o
+obj-$(CONFIG_SBB_MUX)		+= sbb-mux/
+obj-$(CONFIG_SUBSYSTEM_COREDUMP)	+= sscoredump/
+obj-$(CONFIG_ACCESS_RAMOOPS)	+= access_ramoops.o
+obj-$(CONFIG_BCM_GPS_SPI_DRIVER)   += bbdpl/

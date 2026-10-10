@@ -1,0 +1,479 @@
+# SPDX-License-Identifier: GPL-2.0
+
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_pkg//pkg:install.bzl", "pkg_install")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
+load(
+    "//build/kernel/kleaf:kernel.bzl",
+    "dtb_image",
+    "dtbo",
+    "extract_symbols",
+    "initramfs",
+    "kernel_build",
+    "kernel_module",
+    "kernel_module_group",
+    "kernel_modules_install",
+    "kernel_unstripped_modules_archive",
+    "merged_kernel_uapi_headers",
+    "vendor_dlkm_image",
+)
+load("//common:modules.bzl", "get_gki_modules_list")
+load(":slider.bzl", "SLIDER_DTBOS", "SLIDER_DTBS")
+
+package(
+    default_visibility = [
+        "//private/devices/google:__subpackages__",
+        "//private/google-modules:__subpackages__",
+    ],
+)
+
+label_flag(
+    name = "gs_kernel_build",
+    build_setting_default = ":slider",
+)
+
+label_flag(
+    name = "gs_soc_module",
+    build_setting_default = ":gs101_soc",
+)
+
+filegroup(
+    name = "gs_soc.kconfig",
+    srcs = glob([
+        "**/Kconfig",
+    ]) + [
+        "Kconfig.ext",
+        "Kconfig.ext_modules",
+    ],
+)
+
+filegroup(
+    name = "gs.dt-bindings",
+    srcs = glob([
+        "include/dt-bindings/**",
+        "include/dtc/**",
+    ]),
+)
+
+filegroup(
+    name = "gs_soc_sources",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            ".*",
+            ".*/**",
+            "BUILD.bazel",
+            "**/*.bzl",
+            "build.config.*",
+        ],
+    ),
+)
+
+filegroup(
+    name = "gs_soc_headers",
+    srcs = glob([
+        # Standard pixel headers
+        "include/**/*.h",
+        "include/**/uapi/*.h",
+    ] + [
+        # List of headers needed by external modules
+        "drivers/dma-buf/heaps/deferred-free-helper.h",
+        "drivers/dma-buf/heaps/samsung/samsung-dma-heap.h",
+
+        # Needed for external modules to include in their makefiles
+        "Makefile.include",
+    ]),
+)
+
+# The list ordering matches EXT_MODULES in build.config.slider in order to
+# retain the very fragile module load ordering.
+kernel_module_group(
+    name = "slider_ext_modules",
+    srcs = [
+        # do not sort
+        "//private/google-modules/soc/gs:gs101_soc",
+        "//private/google-modules/display:samsung",
+        "//private/google-modules/wlan/bcmdhd4389",
+        "//private/google-modules/gpu/mali_kbase",
+        "//private/google-modules/gpu/mali_pixel",
+        "//private/google-modules/lwis",
+        "//private/google-modules/edgetpu/abrolhos/drivers/edgetpu:edgetpu.abrolhos",
+        "//private/google-modules/bms",
+        "//private/google-modules/bms/misc:bms-misc",
+        "//private/google-modules/amplifiers/snd_soc_wm_adsp:snd-soc-wm-adsp",
+        "//private/google-modules/amplifiers/drv2624",
+        "//private/google-modules/amplifiers/cs40l25",
+        "//private/google-modules/amplifiers/cs40l26",
+        "//private/google-modules/amplifiers/cs35l41",
+        "//private/google-modules/amplifiers/audiometrics",
+        "//private/google-modules/aoc",
+        "//private/google-modules/aoc/alsa",
+        "//private/google-modules/touch/common:touch.common",
+        "//private/google-modules/touch/fts/ftm5",
+        "//private/google-modules/touch/sec",
+        "//private/google-modules/trusty",
+        "//private/google-modules/power/mitigation:bcl",
+        "//private/google-modules/power/reset",
+        "//private/google-modules/bluetooth/broadcom:bluetooth.broadcom",
+        "//private/google-modules/nfc",
+        "//private/google-modules/video/gchips:video.gchips",
+        "//private/google-modules/uwb/kernel:uwb.dw3000",
+    ],
+)
+
+_SLIDER_MODULE_OUTS = [
+    # keep sorted
+    "drivers/i2c/i2c-dev.ko",
+    "drivers/misc/eeprom/at24.ko",
+    "drivers/perf/arm_dsu_pmu.ko",
+    "drivers/pps/clients/pps-gpio.ko",
+    "drivers/scsi/sg.ko",
+    "drivers/spi/spidev.ko",
+    "drivers/watchdog/softdog.ko",
+    "net/core/pktgen.ko",
+    "net/mac80211/mac80211.ko",
+    "net/wireless/cfg80211.ko",
+]
+
+kernel_build(
+    name = "slider",
+    srcs = glob([
+        "build.config.*",
+        "**/Kconfig",
+        "arch/arm64/boot/dts/**",
+        "include/dt-bindings/**",
+        "include/dtc/**",
+    ]) + [
+        # keep sorted
+        "Kconfig.ext",
+        "Kconfig.ext_modules",
+        "arch/arm64/configs/slider_gki.fragment",
+        "//common:kernel_aarch64_sources",
+        "//private/google-modules/bms/misc:bms-misc.kconfig",
+        "//private/google-modules/power/mitigation:bcl.kconfig",
+        "//private/google-modules/power/reset:reset.kconfig",
+        "//private/google-modules/touch/common:common.kconfig",
+        "//private/google-modules/touch/fts/ftm5:ftm5.kconfig",
+        "//private/google-modules/touch/sec:sec.kconfig",
+        "//private/google-modules/trusty:trusty.kconfig",
+        "//private/google-modules/video/gchips:video.gchips.kconfig",
+    ],
+    outs = SLIDER_DTBS,
+    base_kernel = "//common:kernel_aarch64_download_or_build",
+    build_config = "build.config.slider",
+    collect_unstripped_modules = True,
+    dtstree = "//private/google-modules/soc/gs/arch/arm64/boot/dts:dt",
+    implicit_outs = SLIDER_DTBOS,
+    kconfig_ext = "Kconfig.ext",
+    make_goals = [
+        "modules",
+        "dtbs",
+    ],
+    module_outs = _SLIDER_MODULE_OUTS,
+    strip_modules = True,
+)
+
+extract_symbols(
+    name = "slider_extract_symbols",
+    kernel_build = ":slider",
+    kernel_modules = [":slider_ext_modules"],
+    kmi_symbol_list_add_only = False,
+    module_grouping = False,
+)
+
+kernel_module(
+    name = "gs101_soc",
+    srcs = [
+        "//private/google-modules/bms/misc:headers",
+        "//private/google-modules/soc/gs:gs_soc_sources",
+        "//private/google-modules/trusty:headers",
+    ],
+    outs = [
+        # keep sorted
+        "drivers/bts/bts.ko",
+        "drivers/char/hw_random/exyswd-rng.ko",
+        "drivers/clk/gs/clk_exynos_gs.ko",
+        "drivers/clocksource/exynos_mct.ko",
+        "drivers/cpufreq/exynos-acme.ko",
+        "drivers/devfreq/google/arm-memlat-mon.ko",
+        "drivers/devfreq/google/exynos_devfreq.ko",
+        "drivers/devfreq/google/governor_memlat.ko",
+        "drivers/devfreq/google/memlat-devfreq.ko",
+        "drivers/dma-buf/heaps/deferred-free-helper.ko",
+        "drivers/dma-buf/heaps/page_pool.ko",
+        "drivers/dma-buf/heaps/samsung/samsung_dma_heap.ko",
+        "drivers/dma/pl330.ko",
+        "drivers/dma/samsung-dma.ko",
+        "drivers/gpu/exynos/g2d/g2d.ko",
+        "drivers/i2c/busses/i2c-acpm.ko",
+        "drivers/i2c/busses/i2c-exynos5.ko",
+        "drivers/iio/power/odpm.ko",
+        "drivers/input/fingerprint/goodixfp.ko",
+        "drivers/input/keycombo.ko",
+        "drivers/input/keydebug.ko",
+        "drivers/input/misc/vl53l1/stmvl53l1.ko",
+        "drivers/iommu/samsung-iommu-group.ko",
+        "drivers/iommu/samsung-secure-iova.ko",
+        "drivers/iommu/samsung_iommu.ko",
+        "drivers/media/platform/exynos/mfc/exynos_mfc.ko",
+        "drivers/media/platform/exynos/smfc/smfc.ko",
+        "drivers/mfd/s2mpg10-mfd.ko",
+        "drivers/mfd/s2mpg11-mfd.ko",
+        "drivers/mfd/s2mpg1x-gpio.ko",
+        "drivers/mfd/slg51000-core.ko",
+        "drivers/misc/bbdpl/bcm47765.ko",
+        "drivers/misc/gsc-spi.ko",
+        "drivers/misc/sbb-mux/sbb-mux.ko",
+        "drivers/misc/sscoredump/sscoredump.ko",
+        "drivers/pci/controller/dwc/pcie-exynos-gs.ko",
+        "drivers/pci/controller/dwc/pcie-exynos-gs101-rc-cal.ko",
+        "drivers/phy/samsung/phy-exynos-mipi.ko",
+        "drivers/phy/samsung/phy-exynos-mipi-dsim.ko",
+        "drivers/phy/samsung/phy-exynos-usbdrd-super.ko",
+        "drivers/pinctrl/gs/pinctrl-exynos-gs.ko",
+        "drivers/pinctrl/pinctrl-slg51000.ko",
+        "drivers/power/reset/debug-reboot.ko",
+        "drivers/regulator/max77826-gs-regulator.ko",
+        "drivers/regulator/pmic_class.ko",
+        "drivers/regulator/s2mpg10-powermeter.ko",
+        "drivers/regulator/s2mpg10-regulator.ko",
+        "drivers/regulator/s2mpg11-powermeter.ko",
+        "drivers/regulator/s2mpg11-regulator.ko",
+        "drivers/regulator/slg51000-regulator.ko",
+        "drivers/rtc/rtc-s2mpg10.ko",
+        "drivers/scsi/ufs/ufs-exynos-gs.ko",
+        "drivers/soc/google/acpm/acpm_flexpmu_dbg.ko",
+        "drivers/soc/google/acpm/acpm_mbox_test.ko",
+        "drivers/soc/google/acpm/gs_acpm.ko",
+        "drivers/soc/google/acpm/power_stats.ko",
+        "drivers/soc/google/bcm_dbg.ko",
+        "drivers/soc/google/boot_control/boot_control_sysfs.ko",
+        "drivers/soc/google/cal-if/cmupmucal.ko",
+        "drivers/soc/google/cpif/boot_device_spi.ko",
+        "drivers/soc/google/cpif/cp_thermal_zone.ko",
+        "drivers/soc/google/cpif/cpif.ko",
+        "drivers/soc/google/cpif/cpif_page.ko",
+        "drivers/soc/google/cpif/dit/exynos_dit.ko",
+        "drivers/soc/google/cpif/shm_ipc.ko",
+        "drivers/soc/google/dbgcore-dump.ko",
+        "drivers/soc/google/debug/debug-snapshot-debug-kinfo.ko",
+        "drivers/soc/google/debug/debug-snapshot-qd.ko",
+        "drivers/soc/google/debug/debug-snapshot-sfrdump.ko",
+        "drivers/soc/google/debug/dss.ko",
+        "drivers/soc/google/debug/ehld.ko",
+        "drivers/soc/google/debug/exynos-adv-tracer.ko",
+        "drivers/soc/google/debug/exynos-adv-tracer-s2d.ko",
+        "drivers/soc/google/debug/exynos-coresight.ko",
+        "drivers/soc/google/debug/exynos-coresight-etm.ko",
+        "drivers/soc/google/debug/exynos-debug-test.ko",
+        "drivers/soc/google/debug/exynos-ecc-handler.ko",
+        "drivers/soc/google/debug/itmon.ko",
+        "drivers/soc/google/debug/pixel-boot-metrics.ko",
+        "drivers/soc/google/debug/pixel-debug-test.ko",
+        "drivers/soc/google/debug/pixel-suspend-diag.ko",
+        "drivers/soc/google/debug/sjtag-driver.ko",
+        "drivers/soc/google/ect_parser.ko",
+        "drivers/soc/google/eh/eh.ko",
+        "drivers/soc/google/exynos-bcm_dbg-dump.ko",
+        "drivers/soc/google/exynos-cpuhp.ko",
+        "drivers/soc/google/exynos-cpupm.ko",
+        "drivers/soc/google/exynos-dm.ko",
+        "drivers/soc/google/exynos-pd.ko",
+        "drivers/soc/google/exynos-pd-dbg.ko",
+        "drivers/soc/google/exynos-pd_el3.ko",
+        "drivers/soc/google/exynos-pd_hsi0.ko",
+        "drivers/soc/google/exynos-pm.ko",
+        "drivers/soc/google/exynos-pmu-if.ko",
+        "drivers/soc/google/exynos-seclog.ko",
+        "drivers/soc/google/exynos_pm_qos.ko",
+        "drivers/soc/google/gs-chipid.ko",
+        "drivers/soc/google/gsa/gsa.ko",
+        "drivers/soc/google/gsa/gsa_gsc.ko",
+        "drivers/soc/google/hardlockup-debug.ko",
+        "drivers/soc/google/hardlockup-watchdog.ko",
+        "drivers/soc/google/kernel-top.ko",
+        "drivers/soc/google/pixel_stat/mm/pixel_stat_mm.ko",
+        "drivers/soc/google/pixel_stat/pixel_stat_sysfs.ko",
+        "drivers/soc/google/pt/slc_acpm.ko",
+        "drivers/soc/google/pt/slc_dummy.ko",
+        "drivers/soc/google/pt/slc_pmon.ko",
+        "drivers/soc/google/pt/slc_pt.ko",
+        "drivers/soc/google/s2mpu/s2mpu.ko",
+        "drivers/soc/google/sysrq-hook.ko",
+        "drivers/soc/google/vh/kernel/pixel_em/pixel_em.ko",
+        "drivers/soc/google/vh/kernel/systrace.ko",
+        "drivers/spi/spi-s3c64xx.ko",
+        "drivers/thermal/google/gs101_spmic_thermal.ko",
+        "drivers/thermal/samsung/gpu_cooling.ko",
+        "drivers/thermal/samsung/gs_thermal.ko",
+        "drivers/tty/serial/exynos_tty.ko",
+        "drivers/usb/dwc3/dwc3-exynos-usb.ko",
+        "drivers/usb/gadget/function/usb_f_dm.ko",
+        "drivers/usb/gadget/function/usb_f_dm1.ko",
+        "drivers/usb/host/xhci-exynos.ko",
+        "drivers/usb/typec/tcpm/google/bc_max77759.ko",
+        "drivers/usb/typec/tcpm/google/max77759_contaminant.ko",
+        "drivers/usb/typec/tcpm/google/max77759_helper.ko",
+        "drivers/usb/typec/tcpm/google/slg46826.ko",
+        "drivers/usb/typec/tcpm/google/tcpci_fusb307.ko",
+        "drivers/usb/typec/tcpm/google/tcpci_max77759.ko",
+        "drivers/usb/typec/tcpm/google/usb_psy.ko",
+        "drivers/usb/typec/tcpm/google/usbc_cooling_dev.ko",
+        "drivers/watchdog/s3c2410_wdt.ko",
+    ],
+    kernel_build = "//private/google-modules/soc/gs:gs_kernel_build",
+    deps = [
+        "//private/google-modules/bms/misc:bms-misc",
+        "//private/google-modules/trusty",
+    ],
+)
+
+kernel_modules_install(
+    name = "slider_modules_install",
+    kernel_build = ":slider",
+    kernel_modules = [":slider_ext_modules"],
+)
+
+kernel_unstripped_modules_archive(
+    name = "slider_unstripped_modules_archive",
+    kernel_build = ":slider",
+    kernel_modules = [":slider_ext_modules"],
+)
+
+merged_kernel_uapi_headers(
+    name = "slider_merged_kernel_uapi_headers",
+    kernel_build = ":slider",
+    kernel_modules = [":slider_ext_modules"],
+)
+
+_GKI_MODULES = [
+    m
+    for m in get_gki_modules_list("arm64")
+]
+
+write_file(
+    name = "slider_vendor_dlkm_modules_list",
+    out = "slider_vendor_dlkm_modules",
+    content = [
+        # List of in-tree modules
+        "^kernel/" + m
+        for m in _GKI_MODULES + _SLIDER_MODULE_OUTS
+    ] + [
+        # Add all external modules
+        "^extra/.*",
+    ],
+)
+
+dtbo(
+    name = "slider_dtbo",
+    srcs = [":slider/" + e for e in SLIDER_DTBOS],
+    kernel_build = ":slider",
+)
+
+dtb_image(
+    name = "slider_dtb",
+    srcs = [":slider/" + dtb for dtb in SLIDER_DTBS],
+    out = "dtb.img",
+)
+
+initramfs(
+    name = "slider_initramfs",
+    kernel_modules_install = ":slider_modules_install",
+    modules_list = ":vendor_boot_modules.gs101",
+)
+
+filegroup(
+    name = "slider_insmod_cfgs",
+    srcs = [
+        "insmod_cfg/init.insmod.oriole.cfg",
+        "insmod_cfg/init.insmod.raven.cfg",
+    ],
+)
+
+vendor_dlkm_image(
+    name = "slider_vendor_dlkm_image",
+    archive = True,
+    etc_files = [":slider_insmod_cfgs"],
+    kernel_modules_install = ":slider_modules_install",
+    modules_blocklist = "vendor_dlkm.blocklist.slider",
+    modules_list = ":slider_vendor_dlkm_modules_list",
+    props = "vendor_dlkm.props",
+    vendor_boot_modules_load = ":slider_initramfs",
+    deps = ["//prebuilts/boot-artifacts/selinux:vendor_dlkm_file_contexts"],
+)
+
+filegroup(
+    name = "gki_aarch64_boot_lz4",
+    srcs = ["//common:kernel_aarch64_gki_artifacts"],
+    output_group = "boot_lz4",
+)
+
+genrule(
+    name = "gki_aarch64_boot",
+    srcs = [":gki_aarch64_boot_lz4"],
+    outs = ["boot.img"],
+    cmd = "cp -L $< $@",
+)
+
+genrule(
+    name = "slider_abi_gki_aarch64_pixel",
+    srcs = [":slider_extract_symbols"],
+    outs = ["abi_gki_aarch64_pixel"],
+    cmd = "cp -L $< $@",
+)
+
+slider_dist_targets = [
+    ":slider",
+    ":slider_dtb",
+    ":slider_dtbo",
+    ":slider_initramfs",
+    ":slider_vendor_dlkm_image",
+    ":gki_aarch64_boot",
+    # At the time of writing (2022-02-04), this intentionally diverges from
+    # the behavior of build.sh-style mixed builds by also incorporating
+    # UAPI headers of external modules, while build.sh-style mixed builds
+    # always uses kernel-uapi-headers.tar.gz from GKI_DIST_DIR.
+    # To use GKI's kernel-uapi-headers.tar.gz in DIST_DIR, use
+    #     //common:kernel_aarch64_uapi_headers
+    # instead.
+    ":slider_merged_kernel_uapi_headers",
+    ":slider_modules_install",
+    ":slider_unstripped_modules_archive",
+    ":slider_abi_gki_aarch64_pixel",
+    ":slider_insmod_cfgs",
+    "vendor_dlkm.props",
+    "//prebuilts/boot-artifacts/selinux:vendor_dlkm_file_contexts",
+    "//common:kernel_aarch64_download_or_build",
+] + ["//common:kernel_aarch64/" + m for m in _GKI_MODULES]
+
+pkg_files(
+    name = "slider_dist_files",
+    srcs = slider_dist_targets,
+    strip_prefix = strip_prefix.files_only(),
+    visibility = ["//visibility:private"],
+)
+
+pkg_install(
+    name = "slider_dist",
+    srcs = [":slider_dist_files"],
+    destdir = "out/slider/dist",
+)
+
+test_suite(
+    name = "slider_tests",
+    tests = [
+        ":slider_modules_test",
+        ":slider_test",
+        "//common:kernel_aarch64_tests",
+    ],
+    # TODO(b/236871190): re-add this with the kernel_module_group
+    #+ [m + "_test" for m in _slider_modules],
+)
+
+exports_files([
+    # keep sorted
+    "build.config.cloudripper",
+    "vendor_dlkm.blocklist.cloudripper",
+    "vendor_dlkm.props",
+    "vendor_kernel_boot_modules.gs201",
+])

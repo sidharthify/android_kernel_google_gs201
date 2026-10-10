@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0
+
+CFLAGS_bbd.o += -Wno-missing-prototypes
+CFLAGS_bcm_gps_spi.o += -Wno-missing-prototypes
+obj-$(CONFIG_BCM_GPS_SPI_DRIVER) += bcm47765.o
+bcm47765-objs += bcm_gps_regs.o bcm_gps_spi.o bbd.o

@@ -1,0 +1,3 @@
+obj-$(CONFIG_GOODIX_FINGERPRINT) += goodixfp.o
+goodixfp-objs += gf_spi.o platform.o netlink.o
+

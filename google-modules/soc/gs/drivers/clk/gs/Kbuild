@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# GS Clock specific Makefile
+#
+
+CFLAGS_clk-gs101.o += -Wno-missing-prototypes
+CFLAGS_composite.o += -Wno-missing-prototypes
+
+obj-$(CONFIG_EXYNOS_GS_COMMON_CLK)	+= clk_exynos_gs.o
+clk_exynos_gs-$(CONFIG_SOC_GS101)	+= clk-gs101.o
+clk_exynos_gs-$(CONFIG_SOC_GS201)	+= clk-gs201.o
+clk_exynos_gs-y				+= composite.o

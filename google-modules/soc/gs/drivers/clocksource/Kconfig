@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config CLKSRC_EXYNOS_MCT_GS
+	tristate "Exynos multi core timer driver in Google SoCs"
+	depends on ARM || ARM64
+	help
+	  Support for Multi Core Timer controller in certain Google SoCs.
