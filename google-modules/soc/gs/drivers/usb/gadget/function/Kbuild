@@ -4,6 +4,7 @@
 #
 
 ccflags-y			+= -I$(srctree)/drivers/usb/gadget/function/
+ccflags-y			+= -I$(srctree)/drivers/usb
 CFLAGS_f_dm.o += -Wno-missing-prototypes
 CFLAGS_f_dm1.o += -Wno-missing-prototypes
 
