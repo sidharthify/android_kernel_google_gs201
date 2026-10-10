@@ -17,7 +17,6 @@
 #if IS_ENABLED(CONFIG_EXYNOS_ITMON)
 
 /* Linux includes */
-#include <linux/cleanup.h>
 #include <linux/of.h>
 
 /* SOC includes */
@@ -183,7 +182,6 @@ static bool pixel_gpu_itmon_search_context(struct pixel_context *pc,
 	return false;
 }
 
-#if MALI_USE_CSF
 /**
  * pixel_gpu_itmon_search_csffw() - Search the CSF MCU page table.
  *
@@ -209,7 +207,6 @@ static bool pixel_gpu_itmon_search_csffw(struct pixel_context *pc)
 
 	return false;
 }
-#endif /* MALI_USE_CSF */
 
 /**
  * pixel_gpu_itmon_worker() - ITMON fault worker.
@@ -234,9 +231,7 @@ static void pixel_gpu_itmon_worker(struct work_struct *data)
 		"tables...\n", pc->itmon.pa);
 
 	/* Search the CSF MCU page table first */
-#if MALI_USE_CSF
 	found |= pixel_gpu_itmon_search_csffw(pc);
-#endif
 
 	mutex_lock(&kbdev->kctx_list_lock);
 
@@ -338,9 +333,8 @@ int gpu_itmon_init(struct kbase_device *kbdev)
 	 * disabled in "user" builds, so query the build variant and skip
 	 * initialization if that is the case.
 	 */
-	struct device_node *dpm __free(device_node) = of_find_node_by_name(NULL, "dpm");
+	struct device_node *dpm = of_find_node_by_name(NULL, "dpm");
 	const char *variant = NULL;
-
 	if ((!dpm) || of_property_read_string(dpm, "variant", &variant) ||
 	    (!strcmp(variant, "user")))
 		return 0;

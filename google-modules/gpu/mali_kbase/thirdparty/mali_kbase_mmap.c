@@ -102,7 +102,7 @@ static bool align_4gb_no_straddle(unsigned long *gap_end, struct vm_unmapped_are
 	return true;
 }
 
-#if (KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE) || !defined(__ANDROID_COMMON_KERNEL__)
 /**
  * align_and_check() - Align the specified pointer to the provided alignment and
  *                     check that it is still in range. For Kernel versions below
@@ -270,7 +270,8 @@ check_current:
 			}
 		}
 	}
-#else
+#else /* KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE */
+#ifdef __ANDROID_COMMON_KERNEL__
 	struct vm_unmapped_area_info tmp_info = *info;
 	unsigned long length;
 
@@ -343,7 +344,54 @@ check_current:
 		/* Repeat the search with a decreasing rev_high_limit */
 		tmp_info.high_limit = rev_high_limit;
 	}
-#endif
+#else /* __ANDROID_COMMON_KERNEL__ */
+	unsigned long length, high_limit;
+
+	tmp_info.flags |= VM_UNMAPPED_AREA_TOPDOWN;
+	if (!(is_shader_code || is_same_4gb_page))
+		return vm_unmapped_area(&tmp_info);
+
+	/* Adjust search length to account for worst case alignment overhead */
+	length = info->length + info->align_mask;
+	if (length < info->length)
+		return -ENOMEM;
+
+	high_limit = info->high_limit;
+	if ((high_limit - info->low_limit) < length)
+		return -ENOMEM;
+
+	while (true) {
+		unsigned long gap_start, gap_end;
+		unsigned long saved_high_lmt = high_limit;
+
+		if (mas_empty_area_rev(&mas, info->low_limit, high_limit - 1, length))
+			return -ENOMEM;
+
+		gap_end = mas.last + 1;
+		gap_start = mas.index;
+
+		gap_end = vm_unmapped_area(&tmp_info);
+		if (IS_ERR_VALUE(gap_end))
+			return gap_end;
+
+		if (gap_end < info->low_limit)
+			return -ENOMEM;
+
+
+		/* Adjust next search high limit */
+		high_limit = gap_end + length;
+
+		if (WARN_ONCE(high_limit >= saved_high_lmt,
+			      "Unexpected recurring high_limit in search, %lx => %lx\n"
+			      "\tinfo-input: limit=[%lx, %lx], mask=%lx, len=%lx\n",
+			      saved_high_lmt, high_limit, info->low_limit, info->high_limit,
+			      info->align_mask, info->length))
+			high_limit = saved_high_lmt -
+				     (info->align_offset ? info->align_offset : info->length);
+		mas_reset(&mas);
+	}
+#endif /* __ANDROID_COMMON_KERNEL__ */
+#endif /* KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE */
 	return -ENOMEM;
 }
 
@@ -356,7 +404,7 @@ unsigned long kbase_context_get_unmapped_area(struct kbase_context *const kctx,
 					      const unsigned long pgoff, const unsigned long flags)
 {
 	struct mm_struct *mm = current->mm;
-	struct vm_unmapped_area_info info;
+	struct vm_unmapped_area_info info = { 0 };
 	unsigned long align_offset = 0;
 	unsigned long align_mask = 0;
 #if (KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE)
@@ -443,32 +491,19 @@ unsigned long kbase_context_get_unmapped_area(struct kbase_context *const kctx,
 				align_mask = align_offset - 1;
 				is_shader_code = true;
 			}
-#if !MALI_USE_CSF
-		} else if (reg->flags & KBASE_REG_TILER_ALIGN_TOP) {
-			unsigned long extension_bytes =
-				(unsigned long)(reg->extension << PAGE_SHIFT);
-			/* kbase_check_alloc_sizes() already satisfies
-			 * these checks, but they're here to avoid
-			 * maintenance hazards due to the assumptions
-			 * involved
-			 */
-			WARN_ON(reg->extension > (ULONG_MAX >> PAGE_SHIFT));
-			WARN_ON(reg->initial_commit > (ULONG_MAX >> PAGE_SHIFT));
-			WARN_ON(!is_power_of_2(extension_bytes));
-			align_mask = extension_bytes - 1;
-			align_offset = extension_bytes - (reg->initial_commit << PAGE_SHIFT);
-#endif /* !MALI_USE_CSF */
 		} else if (reg->flags & KBASE_REG_GPU_VA_SAME_4GB_PAGE) {
 			is_same_4gb_page = true;
 		}
 		kbase_gpu_vm_unlock(kctx);
-#ifndef CONFIG_64BIT
-	} else {
-		return current->mm->get_unmapped_area(kctx->filp, addr, len, pgoff, flags);
-#endif
+	} else if (!IS_ENABLED(CONFIG_64BIT)) {
+		return kbase_mm_get_unmapped_area_helper(mm, kctx->filp, addr, len, pgoff, flags);
 	}
 
-	info.flags = 0;
+	/* info was initialized as zero therefore only set
+	 * the fields that need a definite value.
+	 * By default, flags and all field that depend on flags
+	 * are set to zero.
+	 */
 	info.length = len;
 	info.low_limit = low_limit;
 	info.high_limit = high_limit;

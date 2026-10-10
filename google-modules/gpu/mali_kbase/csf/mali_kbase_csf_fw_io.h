@@ -26,6 +26,7 @@
 #include <linux/types.h>
 #include <linux/wait.h>
 #include <linux/spinlock.h>
+#include <mali_kbase_io.h>
 
 /** The wait completed because the GPU was lost. */
 #define KBASE_CSF_FW_IO_WAIT_GPU_LOST 1
@@ -181,7 +182,8 @@ void kbase_csf_fw_io_pages_term(struct kbase_csf_fw_io *fw_io, u32 group_num);
  */
 static inline int kbase_csf_fw_io_open(struct kbase_csf_fw_io *fw_io, unsigned long *flags)
 {
-	if (test_bit(KBASEP_FW_IO_STATUS_GPU_SUSPENDED, fw_io->status))
+	if (test_bit(KBASEP_FW_IO_STATUS_GPU_SUSPENDED, fw_io->status) ||
+	    kbase_io_is_aw_removed(fw_io->kbdev))
 		return -KBASE_CSF_FW_IO_WAIT_GPU_LOST;
 
 	spin_lock_irqsave(&fw_io->lock, *flags);
@@ -312,6 +314,39 @@ u32 kbase_csf_fw_io_group_input_read(struct kbase_csf_fw_io *fw_io, u32 group_id
  */
 u32 kbase_csf_fw_io_group_read(struct kbase_csf_fw_io *fw_io, u32 group_id, u32 offset);
 
+/**
+ * kbase_csf_fw_io_group_write64() - Write a double-word in a CSG's input page.
+ *
+ * @fw_io:  Firmware I/O manager.
+ * @group_id: CSG index.
+ * @offset: Offset of the word to write, in bytes.
+ * @value:  Value to be written.
+ */
+void kbase_csf_fw_io_group_write64(struct kbase_csf_fw_io *fw_io, u32 group_id, u32 offset,
+				   u64 value);
+
+/**
+ * kbase_csf_fw_io_group_input64_read() - Read a double-word in a CSG's input page.
+ *
+ * @fw_io:  Firmware I/O manager.
+ * @group_id: CSG index.
+ * @offset: Offset of the word to be read, in bytes.
+ *
+ * Return: Value of the word read from a CSG's input page.
+ */
+u64 kbase_csf_fw_io_group_input64_read(struct kbase_csf_fw_io *fw_io, u32 group_id, u32 offset);
+
+/**
+ * kbase_csf_fw_io_group_write64_mask() - Write part of a double-word in a CSG's input page.
+ *
+ * @fw_io:  Firmware I/O manager.
+ * @group_id: CSG index.
+ * @offset: Offset of the word to write, in bytes.
+ * @value:  Value to be written.
+ * @mask:   Bitmask with the bits to be modified set.
+ */
+void kbase_csf_fw_io_group_write64_mask(struct kbase_csf_fw_io *fw_io, u32 group_id, u32 offset,
+					u64 value, u64 mask);
 
 /**
  * kbase_csf_fw_io_stream_write() - Write a word in a CS's input page.
@@ -389,26 +424,32 @@ bool kbase_csf_fw_io_check_status_gpu_suspended(struct kbase_csf_fw_io *fw_io);
 
 /**
  * kbase_csf_fw_io_wait_event_timeout() - Wait until condition gets true, timeout
- * occurs or a GPU_SUSPENDED FW I/O status bit is set. The rest of the functionalities is equal
- * to wait_event_timeout().
+ * occurs, GPU_SUSPENDED FW I/O status bit is set, or AW was removed.
+ * The rest of the functionalities is equal to wait_event_timeout().
  *
- * @fw_io:     Firmware I/O manager.
+ * @fw_io_p:     Firmware I/O manager.
  * @wq_head:   The waitqueue to wait on.
  * @condition: C expression for the event to wait for
  * @timeout:   Timeout, in jiffies
  *
  * Return: Remaining jiffies (at least 1) on success,
  *         0 on timeout,
- *         negative KBASE_CSF_FW_IO_WAIT_LOST error if GPU_SUSPENDED FW I/O status bit is set.
+ *         negative KBASE_CSF_FW_IO_WAIT_LOST error
+ *         if GPU_SUSPENDED FW I/O status bit is set
+ *         or AW was removed.
  */
-#define kbase_csf_fw_io_wait_event_timeout(fw_io, wq_head, condition, timeout)                     \
-	({                                                                                         \
-		int __ret;                                                                         \
-		int __wait_remaining = wait_event_timeout(                                         \
-			wq_head, (condition) || kbase_csf_fw_io_check_status_gpu_suspended(fw_io), \
-			timeout);                                                                  \
-		__ret = kbasep_csf_fw_io_handle_wait_result(fw_io, __wait_remaining);              \
-		__ret;                                                                             \
+#define kbase_csf_fw_io_wait_event_timeout(fw_io_p, wq_head, condition, timeout)              \
+	({                                                                                    \
+		long __ret;                                                                   \
+		struct kbase_device *__kbdev =                                                \
+			container_of(fw_io_p, struct kbase_device, csf.fw_io);                \
+		long __wait_remaining = kbase_csf_wait_event_timeout(                         \
+			__kbdev, wq_head,                                                     \
+			(condition) || kbase_csf_fw_io_check_status_gpu_suspended(fw_io_p) || \
+				kbase_io_is_aw_removed((fw_io_p)->kbdev),                     \
+			timeout);                                                             \
+		__ret = kbasep_csf_fw_io_handle_wait_result(fw_io_p, __wait_remaining);       \
+		__ret;                                                                        \
 	})
 
 /**
@@ -420,13 +461,17 @@ bool kbase_csf_fw_io_check_status_gpu_suspended(struct kbase_csf_fw_io *fw_io);
  *
  * Return: Remaining jiffies (at least 1) on success,
  *         0 on timeout,
- *         negative KBASE_CSF_FW_IO_WAIT_LOST error if GPU_SUSPENDED FW I/O status bit is set.
+ *         negative KBASE_CSF_FW_IO_WAIT_LOST error
+ *         if GPU_SUSPENDED FW I/O status bit is set
+ *         or AW was removed.
  */
-static inline int kbasep_csf_fw_io_handle_wait_result(struct kbase_csf_fw_io *fw_io,
-						      int wait_remaining)
+static inline long kbasep_csf_fw_io_handle_wait_result(struct kbase_csf_fw_io *fw_io,
+						       long wait_remaining)
 {
-	return kbase_csf_fw_io_check_status_gpu_suspended(fw_io) ? -KBASE_CSF_FW_IO_WAIT_GPU_LOST :
-									 wait_remaining;
+	return (kbase_csf_fw_io_check_status_gpu_suspended(fw_io) ||
+		kbase_io_is_aw_removed(fw_io->kbdev)) ?
+			     -KBASE_CSF_FW_IO_WAIT_GPU_LOST :
+			     wait_remaining;
 }
 
 #if IS_ENABLED(CONFIG_MALI_DEBUG) || IS_ENABLED(CONFIG_MALI_NO_MALI)

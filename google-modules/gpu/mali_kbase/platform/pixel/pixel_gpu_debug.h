@@ -94,7 +94,7 @@ _Static_assert(sizeof(struct pixel_gpu_pdc_status_bits) == sizeof(uint32_t),
  * @_reserved:      Bytes reserved for future use
  **/
 struct pixel_gpu_pdc_status_metadata {
-	char magic[4];
+	char magic[4] __nonstring;
 	uint8_t version;
 	char _reserved[11];
 } __attribute__((packed));
@@ -117,14 +117,7 @@ struct pixel_gpu_pdc_status {
 	} state;
 } __attribute__((packed));
 
-#if MALI_USE_CSF
 void gpu_debug_read_pdc_status(struct kbase_device *kbdev, struct pixel_gpu_pdc_status *status);
-#else
-static void __maybe_unused gpu_debug_read_pdc_status(struct kbase_device *kbdev,
-						     struct pixel_gpu_pdc_status *status)
-{
-	(void)kbdev, (void)status;
-}
-#endif
+void gpu_debug_dump_pdc_status(struct kbase_device *kbdev);
 
 #endif /* _PIXEL_GPU_DEBUG_H_ */

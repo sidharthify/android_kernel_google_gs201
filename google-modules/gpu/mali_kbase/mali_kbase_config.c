@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2011-2015, 2017, 2020-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -99,24 +99,6 @@ void kbasep_platform_context_idle(struct kbase_context *kctx)
 	platform_funcs_p = (struct kbase_platform_funcs_conf*)PLATFORM_FUNCS;
 	if (platform_funcs_p && platform_funcs_p->platform_handler_context_idle)
 		platform_funcs_p->platform_handler_context_idle(kctx);
-}
-
-void kbasep_platform_event_work_begin(void *param)
-{
-	struct kbase_platform_funcs_conf *platform_funcs_p;
-
-	platform_funcs_p = (struct kbase_platform_funcs_conf*)PLATFORM_FUNCS;
-	if (platform_funcs_p && platform_funcs_p->platform_handler_work_begin_func)
-		platform_funcs_p->platform_handler_work_begin_func(param);
-}
-
-void kbasep_platform_event_work_end(void *param)
-{
-	struct kbase_platform_funcs_conf *platform_funcs_p;
-
-	platform_funcs_p = (struct kbase_platform_funcs_conf*)PLATFORM_FUNCS;
-	if (platform_funcs_p && platform_funcs_p->platform_handler_work_end_func)
-		platform_funcs_p->platform_handler_work_end_func(param);
 }
 
 void kbasep_platform_event_tick_tock(struct kbase_device *kbdev)

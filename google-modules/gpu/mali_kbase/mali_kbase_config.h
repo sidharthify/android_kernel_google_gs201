@@ -146,42 +146,6 @@ struct kbase_platform_funcs_conf {
 	 */
 	void (*platform_handler_tick_tock)(struct kbase_device *kbdev);
 	/**
-	 * platform_handler_work_begin_func - Platform specific handler whose
-	 *                                    function changes depending on the
-	 *                                    backend used.
-	 * @param
-	 *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
-	 *    to the atom that just started executing.
-	 *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
-	 *    the group resident in a CSG slot which just started executing.
-	 *
-	 * Function pointer for platform specific handling at the point when a unit
-	 * of work starts running on the GPU or set to NULL if not required. The
-	 * function cannot assume that it is running in a process context.
-	 *
-	 * Context:
-	 *  - If job manager: Function must be runnable in an interrupt context.
-	 */
-	void (*platform_handler_work_begin_func)(void* param);
-	/**
-	 * platform_handler_work_end_func - Platform specific handler whose function
-	 *                                  changes depending on the backend used.
-	 * @param
-	 *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
-	 *    to the atom that just completed.
-	 *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
-	 *    the group resident in a CSG slot which just completed or suspended
-	 *    execution.
-	 *
-	 * Function pointer for platform specific handling at the point when a unit
-	 * of work stops running on the GPU or set to NULL if not required. The
-	 * function cannot assume that it is running in a process context.
-	 *
-	 * Context:
-	 *  - If job manager: Function must be runnable in an interrupt context.
-	 */
-	void (*platform_handler_work_end_func)(void* param);
-	/**
 	 * platform_fw_cfg_init_func - Platform specific callback for FW configuration
 	 *
 	 * @kbdev: kbase_device pointer
@@ -281,7 +245,7 @@ struct kbase_pm_callback_conf {
 	 * to the OS from within this function.
 	 * The runtime calls can be triggered by calls from @ref power_off_callback
 	 * and @ref power_on_callback.
-	 * Note: for linux the kernel must have CONFIG_PM_RUNTIME enabled to use this feature.
+	 * Note: for linux the kernel must have CONFIG_PM enabled to use this feature.
 	 *
 	 * @return 0 on success, else int error code.
 	 */
@@ -292,21 +256,21 @@ struct kbase_pm_callback_conf {
 	 * The runtime power management callbacks @ref power_runtime_off_callback
 	 * and @ref power_runtime_on_callback should no longer be called by the
 	 * OS on completion of this function.
-	 * Note: for linux the kernel must have CONFIG_PM_RUNTIME enabled to use this feature.
+	 * Note: for linux the kernel must have CONFIG_PM enabled to use this feature.
 	 */
 	void (*power_runtime_term_callback)(struct kbase_device *kbdev);
 
 	/** Callback for runtime power-off power management callback
 	 *
 	 * For linux this callback will be called by the kernel runtime_suspend callback.
-	 * Note: for linux the kernel must have CONFIG_PM_RUNTIME enabled to use this feature.
+	 * Note: for linux the kernel must have CONFIG_PM enabled to use this feature.
 	 */
 	void (*power_runtime_off_callback)(struct kbase_device *kbdev);
 
 	/** Callback for runtime power-on power management callback
 	 *
 	 * For linux this callback will be called by the kernel runtime_resume callback.
-	 * Note: for linux the kernel must have CONFIG_PM_RUNTIME enabled to use this feature.
+	 * Note: for linux the kernel must have CONFIG_PM enabled to use this feature.
 	 *
 	 * @return 0 on success, else OS error code.
 	 */
@@ -330,7 +294,7 @@ struct kbase_pm_callback_conf {
 	 * This callback is optional and if not provided regular autosuspend
 	 * will be triggered.
 	 *
-	 * Note: The Linux kernel must have CONFIG_PM_RUNTIME enabled to use
+	 * Note: The Linux kernel must have CONFIG_PM enabled to use
 	 * this feature.
 	 *
 	 * Return 0 if GPU can be suspended, positive value if it can not be
@@ -373,7 +337,7 @@ struct kbase_pm_callback_conf {
 	 * GPU registers still remain accessible until @power_off_callback gets
 	 * invoked later on the expiry of auto-suspend timer.
 	 *
-	 * Note: The Linux kernel must have CONFIG_PM_RUNTIME enabled to use
+	 * Note: The Linux kernel must have CONFIG_PM enabled to use
 	 * this feature.
 	 */
 	void (*power_runtime_gpu_idle_callback)(struct kbase_device *kbdev);
@@ -396,7 +360,7 @@ struct kbase_pm_callback_conf {
 	 * to avoid a potential deadlock due to the runtime suspend happening
 	 * simultaneously from some other thread.
 	 *
-	 * Note: The Linux kernel must have CONFIG_PM_RUNTIME enabled to use
+	 * Note: The Linux kernel must have CONFIG_PM enabled to use
 	 * this feature.
 	 */
 	void (*power_runtime_gpu_active_callback)(struct kbase_device *kbdev);
@@ -614,39 +578,6 @@ void kbasep_platform_context_active(struct kbase_context *kctx);
  * Function calls a platform defined routine if specified in the configuration attributes.
  */
 void kbasep_platform_context_idle(struct kbase_context *kctx);
-
-/**
- * kbasep_platform_event_work_begin - Platform specific callback whose function
- *                                    changes depending on the backend used.
- *                                    Signals that a unit of work has started
- *                                    running on the GPU.
- * @param
- *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
- *    to the atom that just started executing.
- *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
- *    the group resident in a CSG slot which just started executing.
- *
- * Function calls a platform defined routine if specified in the configuration
- * attributes. The routine should not assume that it is in a process context.
- *
- */
-void kbasep_platform_event_work_begin(void *param);
-
-/**
- * kbasep_platform_event_work_end - Platform specific callback whose function
- *                                  changes depending on the backend used.
- *                                  Signals that a unit of work has completed.
- * @param
- *  - If job manager GPU: Param is a pointer of type struct kbase_jd_atom*,
- *    to the atom that just completed.
- *  - If CSF GPU: Param is a pointer of type struct kbase_queue_group*, to
- *    the group resident in a CSG slot which just completed or suspended execution.
- *
- * Function calls a platform defined routine if specified in the configuration
- * attributes. The routine should not assume that it is in a process context.
- *
- */
-void kbasep_platform_event_work_end(void *param);
 
 /**
  * kbasep_platform_tick_tock - Platform specific callback when a scheduler tick/tock occurs.

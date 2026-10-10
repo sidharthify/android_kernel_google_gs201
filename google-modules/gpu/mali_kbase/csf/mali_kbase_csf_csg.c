@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2023-2024 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2023-2025 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -46,7 +46,7 @@
  * The access to it is serialized with scheduler lock, so at a time it would
  * get used either for "active_groups" or per context "groups".
  */
-static DECLARE_BITMAP(csg_slots_status_updated, MAX_SUPPORTED_CSGS);
+static DECLARE_BITMAP(csg_slots_status_updated, BASEP_QUEUE_GROUP_MAX);
 
 /* String header for dumping cs user I/O status information */
 #define KBASEP_CSF_CSG_DUMP_CS_HEADER_USER_IO \
@@ -184,6 +184,17 @@ static bool sb_source_supported(u32 glb_version)
 	return supported;
 }
 
+/**
+ * progress_counters_supported() - Check PROGRESS_COUNTER GLB version support
+ *
+ * @glb_version:  The GLB version
+ *
+ * Return: False or true on success.
+ */
+static bool progress_counters_supported(u32 glb_version)
+{
+	return !(GLB_VERSION_MAJOR_GET(glb_version) >= 4);
+}
 
 /**
  * kbasep_csf_csg_active_dump_cs_status_wait() - Dump active queue sync status information.
@@ -209,7 +220,7 @@ static void kbasep_csf_csg_active_dump_cs_status_wait(struct kbase_context *kctx
 	if (sb_source_supported(glb_version))
 		kbasep_print(kbpr, "SB_SOURCE: %d\n", CS_STATUS_WAIT_SB_SOURCE_GET(wait_status));
 
-	{
+	if (progress_counters_supported(glb_version)) {
 		kbasep_print(kbpr, "PROGRESS_WAIT: %s\n",
 			     CS_STATUS_WAIT_PROGRESS_WAIT_GET(wait_status) ? WAITING : NOT_WAITING);
 	}
@@ -440,6 +451,9 @@ static void kbasep_csf_csg_active_dump_queue(struct kbasep_printer *kbpr, struct
 			     CS_STATUS_REQ_RESOURCE_FRAGMENT_RESOURCES_GET(req_res));
 		kbasep_print(kbpr, "REQ_RESOURCE [TILER]: %d\n",
 			     CS_STATUS_REQ_RESOURCE_TILER_RESOURCES_GET(req_res));
+		if (kbdev->gpu_props.gpu_id.product_model >= GPU_ID_MODEL_MAKE(14, 0))
+			kbasep_print(kbpr, "REQ_RESOURCE [NEURAL]: %d\n",
+				     CS_STATUS_REQ_RESOURCE_NEURAL_RESOURCES_GET(req_res));
 		kbasep_print(kbpr, "REQ_RESOURCE [IDVS]: %d\n",
 			     CS_STATUS_REQ_RESOURCE_IDVS_RESOURCES_GET(req_res));
 
@@ -505,6 +519,10 @@ static void kbasep_csf_csg_active_dump_group(struct kbasep_printer *kbpr,
 			exclusive = 'C';
 		else if (CSG_STATUS_EP_REQ_EXCLUSIVE_FRAGMENT_GET(ep_r))
 			exclusive = 'F';
+		else if ((kbdev->gpu_props.gpu_id.arch_id >= GPU_ID_ARCH_MAKE(14, 0, 0)) &&
+			 CSG_STATUS_EP_REQ_EXCLUSIVE_NEURAL_GET(ep_r))
+			exclusive = 'N';
+
 		else
 			exclusive = '0';
 
@@ -517,6 +535,27 @@ static void kbasep_csf_csg_active_dump_group(struct kbasep_printer *kbpr,
 				     group->csg_nr);
 			kbasep_print(kbpr, "*** The following group-record is likely stale\n");
 		}
+		if (kbdev->gpu_props.gpu_id.product_model >= GPU_ID_MODEL_MAKE(14, 0)) {
+			kbasep_print(kbpr, "GroupID, CSG NR, CSG Prio, Run State, Priority,"
+					   " C_EP(Alloc/Req), F_EP(Alloc/Req), T_EP(Alloc/Req),"
+					   " N_EP(Alloc/Req), C_EP PRI Threshold, C_EP PRI Ratio,"
+					   " F_EP Task Limit, Exclusive, Idle\n");
+			kbasep_print(
+				kbpr,
+				"%7d, %6d, %8d, %9d, %8d, %11d/%3d, %11d/%3d, %11d/%3d, %11d/%3d,"
+				" %18d, %14d, %15d, %9c, %4c\n",
+				group->handle, group->csg_nr, slot_priority, group->run_state,
+				group->priority, CSG_STATUS_EP_CURRENT_COMPUTE_EP_GET(ep_c),
+				CSG_STATUS_EP_REQ_COMPUTE_EP_GET(ep_r),
+				CSG_STATUS_EP_CURRENT_FRAGMENT_EP_GET(ep_c),
+				CSG_STATUS_EP_REQ_FRAGMENT_EP_GET(ep_r),
+				CSG_STATUS_EP_CURRENT_TILER_EP_GET(ep_c),
+				CSG_STATUS_EP_REQ_TILER_EP_GET(ep_r),
+				CSG_STATUS_EP_CURRENT_NEURAL_EP_GET(ep_c),
+				CSG_STATUS_EP_REQ_NEURAL_EP_GET(ep_r), group->comp_pri_threshold,
+				group->comp_pri_ratio, group->fragment_endpoint_task_limit,
+				exclusive, idle);
+		} else {
 			kbasep_print(
 				kbpr,
 				"GroupID, CSG NR, CSG Prio, Run State, Priority, C_EP(Alloc/Req),"
@@ -531,6 +570,7 @@ static void kbasep_csf_csg_active_dump_group(struct kbasep_printer *kbpr,
 				CSG_STATUS_EP_REQ_FRAGMENT_EP_GET(ep_r),
 				CSG_STATUS_EP_CURRENT_TILER_EP_GET(ep_c),
 				CSG_STATUS_EP_REQ_TILER_EP_GET(ep_r), exclusive, idle);
+		}
 
 	} else {
 		kbasep_print(kbpr, "GroupID, CSG NR, Run State, Priority\n");
@@ -543,7 +583,7 @@ static void kbasep_csf_csg_active_dump_group(struct kbasep_printer *kbpr,
 
 		kbasep_print(kbpr, "Bound queues:\n");
 
-		for (i = 0; i < MAX_SUPPORTED_STREAMS_PER_GROUP; i++)
+		for (i = 0; i < BASEP_GPU_QUEUE_PER_QUEUE_GROUP_MAX; i++)
 			kbasep_csf_csg_active_dump_queue(kbpr, group->bound_queues[i]);
 	}
 }
@@ -551,7 +591,7 @@ static void kbasep_csf_csg_active_dump_group(struct kbasep_printer *kbpr,
 void kbase_csf_csg_update_status(struct kbase_device *kbdev)
 {
 	u32 max_csg_slots = kbdev->csf.global_iface.group_num;
-	DECLARE_BITMAP(used_csgs, MAX_SUPPORTED_CSGS) = { 0 };
+	DECLARE_BITMAP(used_csgs, BASEP_QUEUE_GROUP_MAX) = { 0 };
 	u32 csg_nr;
 	unsigned long flags, fw_io_flags;
 
@@ -599,7 +639,7 @@ void kbase_csf_csg_update_status(struct kbase_device *kbdev)
 									     csg_nr, CSG_ACK),
 						 CSG_REQ_STATUS_UPDATE_MASK);
 
-	BUILD_BUG_ON(MAX_SUPPORTED_CSGS > (sizeof(used_csgs[0]) * BITS_PER_BYTE));
+	BUILD_BUG_ON(BASEP_QUEUE_GROUP_MAX > (sizeof(used_csgs[0]) * BITS_PER_BYTE));
 	kbase_csf_ring_csg_slots_doorbell(kbdev, used_csgs[0]);
 	kbase_csf_fw_io_close(&kbdev->csf.fw_io, fw_io_flags);
 	kbase_csf_scheduler_spin_unlock(kbdev, flags);

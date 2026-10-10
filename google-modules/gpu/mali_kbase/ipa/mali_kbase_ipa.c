@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2016-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2016-2025 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -458,8 +458,8 @@ static u32 get_static_power_locked(struct kbase_device *kbdev, struct kbase_ipa_
 	return power;
 }
 
-#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
-#if defined(CONFIG_MALI_PWRSOFT_765) || KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
+#if KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE
+#if KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
 static unsigned long kbase_get_static_power(struct devfreq *df, unsigned long voltage)
 #else
 static unsigned long kbase_get_static_power(unsigned long voltage)
@@ -467,7 +467,7 @@ static unsigned long kbase_get_static_power(unsigned long voltage)
 {
 	struct kbase_ipa_model *model;
 	u32 power = 0;
-#if defined(CONFIG_MALI_PWRSOFT_765) || KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
+#if KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
 	struct kbase_device *kbdev = dev_get_drvdata(&df->dev);
 #else
 	struct kbase_device *kbdev = kbase_find_device(-1);
@@ -483,13 +483,13 @@ static unsigned long kbase_get_static_power(unsigned long voltage)
 
 	mutex_unlock(&kbdev->ipa.lock);
 
-#if !(defined(CONFIG_MALI_PWRSOFT_765) || KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE)
+#if !(KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE)
 	kbase_release_device(kbdev);
 #endif
 
 	return power;
 }
-#endif /* KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE */
+#endif /* KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE */
 
 /**
  * opp_translate_freq_voltage() - Translate nominal OPP frequency from
@@ -543,8 +543,8 @@ static void opp_translate_freq_voltage(struct kbase_device *kbdev, unsigned long
 #endif
 }
 
-#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
-#if defined(CONFIG_MALI_PWRSOFT_765) || KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
+#if KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE
+#if KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
 static unsigned long kbase_get_dynamic_power(struct devfreq *df, unsigned long freq,
 					     unsigned long voltage)
 #else
@@ -557,7 +557,7 @@ static unsigned long kbase_get_dynamic_power(unsigned long freq, unsigned long v
 	u32 power_coeffs[KBASE_IPA_BLOCK_TYPE_NUM] = { 0 };
 	u32 power = 0;
 	int err = 0;
-#if defined(CONFIG_MALI_PWRSOFT_765) || KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
+#if KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
 	struct kbase_device *kbdev = dev_get_drvdata(&df->dev);
 #else
 	struct kbase_device *kbdev = kbase_find_device(-1);
@@ -593,13 +593,13 @@ static unsigned long kbase_get_dynamic_power(unsigned long freq, unsigned long v
 
 	mutex_unlock(&kbdev->ipa.lock);
 
-#if !(defined(CONFIG_MALI_PWRSOFT_765) || KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE)
+#if !(KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE)
 	kbase_release_device(kbdev);
 #endif
 
 	return power;
 }
-#endif /* KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE */
+#endif /* KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE */
 
 int kbase_get_real_power_locked(struct kbase_device *kbdev, u32 *power, unsigned long freq,
 				unsigned long voltage)
@@ -693,11 +693,11 @@ int kbase_get_real_power(struct devfreq *df, u32 *power, unsigned long freq, uns
 KBASE_EXPORT_TEST_API(kbase_get_real_power);
 
 struct devfreq_cooling_power kbase_ipa_power_model_ops = {
-#if KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE
+#if KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE
 	.get_static_power = &kbase_get_static_power,
 	.get_dynamic_power = &kbase_get_dynamic_power,
-#endif /* KERNEL_VERSION(5, 10, 0) > LINUX_VERSION_CODE */
-#if defined(CONFIG_MALI_PWRSOFT_765) || KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
+#endif /* KERNEL_VERSION(5, 11, 0) > LINUX_VERSION_CODE */
+#if KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE
 	.get_real_power = &kbase_get_real_power,
 #endif
 };

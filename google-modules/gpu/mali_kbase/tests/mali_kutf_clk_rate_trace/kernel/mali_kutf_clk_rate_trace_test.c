@@ -19,7 +19,6 @@
  *
  */
 
-#include <linux/cleanup.h>
 #include <linux/fdtable.h>
 #include <linux/module.h>
 
@@ -177,9 +176,6 @@ static void kutf_set_pm_ctx_active(struct kutf_context *context)
 
 	kbase_pm_context_active(data->kbdev);
 	kbase_pm_wait_for_desired_state(data->kbdev);
-#if !MALI_USE_CSF
-	kbase_pm_request_gpu_cycle_counter(data->kbdev);
-#endif
 }
 
 static void kutf_set_pm_ctx_idle(struct kutf_context *context)
@@ -188,9 +184,6 @@ static void kutf_set_pm_ctx_idle(struct kutf_context *context)
 
 	if (WARN_ON(data->pm_ctx_cnt > 0))
 		return;
-#if !MALI_USE_CSF
-	kbase_pm_release_gpu_cycle_counter(data->kbdev);
-#endif
 	kbase_pm_context_idle(data->kbdev);
 }
 
@@ -424,6 +417,7 @@ static const char *kutf_clk_trace_do_get_platform(struct kutf_context *context,
 	int seq = cmd->cmd_input.u.val_u64 & 0xFF;
 	char const *errmsg = NULL;
 	const void *arbiter_if_node = NULL;
+	const void *power_node = NULL;
 	const char *platform = "GPU";
 #if defined(CONFIG_OF)
 	struct kutf_clk_rate_trace_fixture_data *data = context->fixture;
@@ -433,8 +427,6 @@ static const char *kutf_clk_trace_do_get_platform(struct kutf_context *context,
 		arbiter_if_node = of_get_property(data->kbdev->dev->of_node, "arbiter_if", NULL);
 #endif
 	if (arbiter_if_node) {
-		struct device_node *power_node __free(device_node);
-
 		power_node = of_find_compatible_node(NULL, NULL, "arm,mali-gpu-power");
 		if (power_node) {
 			platform = "PV";
@@ -799,6 +791,10 @@ static void *mali_kutf_clk_rate_trace_create_fixture(struct kutf_context *contex
 		return NULL;
 
 	memset(data, 0, sizeof(*data));
+
+	/* Initialize listener's list node */
+	INIT_LIST_HEAD(&data->listener.node);
+
 	pr_debug("Hooking up the test portal to kbdev clk rate trace\n");
 	spin_lock(&kbdev->pm.clk_rtm.lock);
 

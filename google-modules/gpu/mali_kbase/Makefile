@@ -61,8 +61,7 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
         CONFIG_MALI_PLATFORM_NAME ?= "devicetree"
         CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD ?= y
         CONFIG_MALI_GATOR_SUPPORT ?= y
-        CONFIG_MALI_ARBITRATION ?= n
-        CONFIG_MALI_PARTITION_MANAGER ?= n
+        CONFIG_MALI_KUTF_PTM_TESTS ?= n
 
 
         ifneq ($(CONFIG_MALI_NO_MALI),y)
@@ -101,10 +100,6 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
                 CONFIG_MALI_REAL_HW = y
             endif
 
-            ifneq ($(CONFIG_ANDROID), y)
-                CONFIG_PAGE_MIGRATION_SUPPORT ?= y
-            endif
-
 
             ifeq ($(CONFIG_MALI_HW_ERRATA_1485982_NOT_AFFECTED), y)
                 # Prevent misuse when CONFIG_MALI_HW_ERRATA_1485982_NOT_AFFECTED=y
@@ -129,7 +124,6 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
             # Prevent misuse when CONFIG_MALI_EXPERT=n
             CONFIG_MALI_CORESTACK = n
             CONFIG_LARGE_PAGE_SUPPORT = y
-            CONFIG_MALI_PWRSOFT_765 = n
             CONFIG_MALI_JOB_DUMP = n
             CONFIG_MALI_NO_MALI = n
             CONFIG_MALI_REAL_HW = y
@@ -168,7 +162,6 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
         endif
     else
         # Prevent misuse when CONFIG_MALI_MIDGARD=n
-        CONFIG_MALI_ARBITRATION = n
         CONFIG_MALI_KUTF = n
         CONFIG_MALI_KUTF_IRQ_TEST = n
         CONFIG_MALI_KUTF_CLK_RATE_TRACE = y
@@ -179,8 +172,7 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
     CONFIGS += \
         CONFIG_MALI_MIDGARD \
         CONFIG_MALI_GATOR_SUPPORT \
-        CONFIG_MALI_ARBITRATION \
-        CONFIG_MALI_PARTITION_MANAGER \
+        CONFIG_MALI_KUTF_PTM_TESTS \
         CONFIG_MALI_REAL_HW \
         CONFIG_MALI_DEVFREQ \
         CONFIG_MALI_MIDGARD_DVFS \
@@ -188,12 +180,9 @@ ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
         CONFIG_MALI_DMA_BUF_LEGACY_COMPAT \
         CONFIG_MALI_EXPERT \
         CONFIG_MALI_CORESTACK \
-        CONFIG_PAGE_MIGRATION_SUPPORT \
         CONFIG_LARGE_PAGE_SUPPORT \
-        CONFIG_MALI_PWRSOFT_765 \
         CONFIG_MALI_JOB_DUMP \
         CONFIG_MALI_NO_MALI \
-        CONFIG_MALI_IS_FPGA \
         CONFIG_MALI_HW_ERRATA_1485982_NOT_AFFECTED \
         CONFIG_MALI_HW_ERRATA_1485982_USE_CLOCK_ALTERNATIVE \
         CONFIG_MALI_PRFCNT_SET_PRIMARY \
@@ -253,25 +242,25 @@ EXTRA_CFLAGS := $(foreach config,$(CONFIGS), \
                         -D$(value config)=1))
 
 ifeq ($(MALI_KCONFIG_EXT_PREFIX),)
-    EXTRA_CFLAGS += -DCONFIG_MALI_PLATFORM_NAME='\"$(CONFIG_MALI_PLATFORM_NAME)\"'
-    EXTRA_CFLAGS += -DCONFIG_MALI_NO_MALI_DEFAULT_GPU='\"$(CONFIG_MALI_NO_MALI_DEFAULT_GPU)\"'
+    EXTRA_CFLAGS += -DCONFIG_MALI_PLATFORM_NAME=$(CONFIG_MALI_PLATFORM_NAME)
+    EXTRA_CFLAGS += -DCONFIG_MALI_NO_MALI_DEFAULT_GPU=$(CONFIG_MALI_NO_MALI_DEFAULT_GPU)
 endif
 
-include $(KDIR)/../private/google-modules/soc/gs/Makefile.include
+include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 
 #
 # KBUILD_EXTRA_SYMBOLS to prevent warnings about unknown functions
 #
-BASE_SYMBOLS = $(OUT_DIR)/../private/google-modules/gpu/mali_pixel/Module.symvers
+BASE_SYMBOLS = $(COMMON_OUT_DIR)/private/google-modules/gpu/mali_pixel/Module.symvers
 
 EXTRA_SYMBOLS += \
     $(BASE_SYMBOLS)
-EXTRA_SYMBOLS += $(OUT_DIR)/../private/google-modules/power/mitigation/Module.symvers
-
-CFLAGS_MODULE += -Wall -Werror
+EXTRA_SYMBOLS += $(COMMON_OUT_DIR)/private/google-modules/power/mitigation/Module.symvers
 
 # The following were added to align with W=1 in scripts/Makefile.extrawarn
 # from the Linux source tree (v5.18.14)
+ifdef MALI_ENABLE_EXTRAWARN
+CFLAGS_MODULE += -Wall -Werror
 CFLAGS_MODULE += -Wextra -Wunused -Wno-unused-parameter
 CFLAGS_MODULE += -Wmissing-declarations
 CFLAGS_MODULE += -Wmissing-format-attribute
@@ -289,11 +278,16 @@ CFLAGS_MODULE += -Wno-sign-compare
 CFLAGS_MODULE += -Wno-shift-negative-value
 # This flag is needed to avoid build errors on older kernels
 CFLAGS_MODULE += $(call cc-option, -Wno-cast-function-type)
+# This flag was added on v6.6 kernel
+CFLAGS_MODULE += $(call cc-option,-Werror=designated-init)
+endif
 
 KBUILD_CPPFLAGS += -DKBUILD_EXTRA_WARN1
+KBUILD_OPTIONS += $(MAKE_ARGS)
 
 # The following were added to align with W=2 in scripts/Makefile.extrawarn
 # from the Linux source tree (v5.18.14)
+ifdef MALI_ENABLE_EXTRAWARN
 CFLAGS_MODULE += -Wdisabled-optimization
 # The -Wshadow flag cannot be enabled unless upstream kernels are
 # patched to fix redefinitions of certain built-in functions and
@@ -306,6 +300,7 @@ CFLAGS_MODULE += $(call cc-option, -Wmaybe-uninitialized)
 CFLAGS_MODULE += $(call cc-option, -Wunused-macros)
 # The following ensures the stack frame does not get larger than a page
 CFLAGS_MODULE += -Wframe-larger-than=4096
+endif
 
 KBUILD_CPPFLAGS += -DKBUILD_EXTRA_WARN2
 
@@ -324,11 +319,8 @@ ifeq ($(CONFIG_MALI_KCOV),y)
     EXTRA_CFLAGS += -DKCOV_ENABLE_COMPARISONS=1
 endif
 
-all:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" modules
+# Define and "all" target, which isn't really needed but doesn't hurt.
+all: modules
 
-modules_install:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) modules_install
-
-clean:
-	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) clean
+modules modules_install clean compile_commands.json:
+	$(MAKE) -C $(KDIR) M=$(M) W=1 $(MAKE_ARGS) EXTRA_CFLAGS="$(EXTRA_CFLAGS)" KBUILD_EXTRA_SYMBOLS="$(EXTRA_SYMBOLS)" $(@)

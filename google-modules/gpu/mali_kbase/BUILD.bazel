@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
 # This program is free software and is provided to you under the terms of the
 # GNU General Public License version 2 as published by the Free Software
 # Foundation, and any use by you of this program is subject to the terms
@@ -13,6 +12,7 @@
 # along with this program; if not, you can access it online at
 # http://www.gnu.org/licenses/gpl-2.0.html.
 #
+# SPDX-License-Identifier: GPL-2.0
 
 load(
     "//build/kernel/kleaf:kernel.bzl",
@@ -38,7 +38,7 @@ kernel_module(
         "//private/google-modules/soc/gs:gs_soc_headers",
     ],
     outs = _midgard_modules,
-    kernel_build = "//private/google-modules/soc/gs:gs_kernel_build",
+    kernel_build = "//private/devices/google/common:kernel",
     visibility = [
         "//private/devices/google:__subpackages__",
         "//private/google-modules/soc/gs:__pkg__",

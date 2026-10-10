@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2024 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2024-2025 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -26,10 +26,13 @@
 
 /* Kernel-side only flags allocated from 63 bit downwards */
 
+/* Allocation is actively used for JIT memory */
+#define BASEP_MEM_ACTIVE_JIT_ALLOC ((base_mem_alloc_flags)1 << 60)
+
 /* The first available bit which can be used to define new memory flag
  * if needed. It should be decremented by one once new flag is added
  * and BASEP_MEM_FLAGS_NR_BITS should be incremented accordingly
  */
-#define BASEP_MEM_FIRST_FREE_FLAG ((base_mem_alloc_flags)1 << 61)
+#define BASEP_MEM_FIRST_FREE_FLAG ((base_mem_alloc_flags)1 << 59)
 
 #endif /* _KBASE_CSF_MEM_FLAGS_H_ */
