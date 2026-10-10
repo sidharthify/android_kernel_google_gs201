@@ -37,6 +37,7 @@
  */
 
 #include <linux/spi/spi.h>
+#include <linux/of_gpio.h>
 #include <drm/drm_panel.h>
 
 #include "syna_tcm2.h"
@@ -426,6 +427,29 @@ exit:
 }
 
 
+/*
+ * of_get_named_gpio_flags() is gone since Linux 6.2. The irq-gpio flags cell
+ * carries the IRQ trigger flags, so read it straight from the phandle args.
+ */
+static int syna_spi_get_named_gpio_flags(struct device_node *np,
+		const char *propname, unsigned long *flags)
+{
+	struct of_phandle_args args;
+	int gpio;
+
+	gpio = of_get_named_gpio(np, propname, 0);
+	if (gpio < 0)
+		return gpio;
+
+	if (flags && !of_parse_phandle_with_args(np, propname, "#gpio-cells",
+						 0, &args)) {
+		*flags = args.args_count > 1 ? args.args[1] : 0;
+		of_node_put(args.np);
+	}
+
+	return gpio;
+}
+
 /**
  * syna_spi_parse_dt()
  *
@@ -490,9 +514,8 @@ static int syna_spi_parse_dt(struct syna_hw_interface *hw_if,
 
 	prop = of_find_property(np, "synaptics,irq-gpio", NULL);
 	if (prop && prop->length) {
-		attn->irq_gpio = of_get_named_gpio_flags(np,
-				"synaptics,irq-gpio", 0,
-				(enum of_gpio_flags *)&attn->irq_flags);
+		attn->irq_gpio = syna_spi_get_named_gpio_flags(np,
+				"synaptics,irq-gpio", &attn->irq_flags);
 	} else {
 		attn->irq_gpio = -1;
 	}
@@ -517,16 +540,16 @@ static int syna_spi_parse_dt(struct syna_hw_interface *hw_if,
 
 	prop = of_find_property(np, "synaptics,vdd-gpio", NULL);
 	if (prop && prop->length) {
-		pwr->vdd_gpio = of_get_named_gpio_flags(np,
-				"synaptics,vdd-gpio", 0, NULL);
+		pwr->vdd_gpio = of_get_named_gpio(np,
+				"synaptics,vdd-gpio", 0);
 	} else {
 		pwr->vdd_gpio = -1;
 	}
 
 	prop = of_find_property(np, "synaptics,avdd-gpio", NULL);
 	if (prop && prop->length) {
-		pwr->avdd_gpio = of_get_named_gpio_flags(np,
-				"synaptics,avdd-gpio", 0, NULL);
+		pwr->avdd_gpio = of_get_named_gpio(np,
+				"synaptics,avdd-gpio", 0);
 	} else {
 		pwr->avdd_gpio = -1;
 	}
@@ -563,8 +586,8 @@ static int syna_spi_parse_dt(struct syna_hw_interface *hw_if,
 
 	prop = of_find_property(np, "synaptics,reset-gpio", NULL);
 	if (prop && prop->length) {
-		rst->reset_gpio = of_get_named_gpio_flags(np,
-				"synaptics,reset-gpio", 0, NULL);
+		rst->reset_gpio = of_get_named_gpio(np,
+				"synaptics,reset-gpio", 0);
 	} else {
 		rst->reset_gpio = -1;
 	}
@@ -1011,7 +1034,7 @@ static int syna_spi_probe(struct spi_device *spi)
 	struct syna_hw_attn_data *attn = &syna_spi_hw_if.bdata_attn;
 	struct syna_hw_bus_data *bus = &syna_spi_hw_if.bdata_io;
 
-	if (spi->master->flags & SPI_MASTER_HALF_DUPLEX) {
+	if (spi->controller->flags & SPI_CONTROLLER_HALF_DUPLEX) {
 		LOGE("Full duplex not supported by host\n");
 		return -EIO;
 	}
