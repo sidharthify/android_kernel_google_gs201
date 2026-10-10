@@ -20,7 +20,11 @@
 #include <linux/slab.h>
 #include <linux/version.h>
 #include <linux/limits.h>
+/* The pixel_stat meminfo provider interface is gone on 6.12 */
+#if __has_include(<soc/google/meminfo.h>)
 #include <soc/google/meminfo.h>
+#define MGM_PIXEL_MEMINFO
+#endif
 
 #include <linux/memory_group_manager.h>
 
@@ -341,6 +345,7 @@ static struct kobj_type mgm_ktype = {
 	.default_groups = mgm_groups,
 };
 
+#ifdef MGM_PIXEL_MEMINFO
 static unsigned long gpu_meminfo_size(void *private)
 {
 	return atomic64_read(&total_gpu_pages) << (PAGE_SHIFT - 10);
@@ -350,6 +355,7 @@ static struct meminfo gpu_meminfo = {
 	.name = "Gpu",
 	.size_kb = gpu_meminfo_size,
 };
+#endif
 
 static int mgm_sysfs_init(struct mgm_groups *data)
 {
@@ -364,13 +370,17 @@ static int mgm_sysfs_init(struct mgm_groups *data)
 		return ret;
 	}
 
+#ifdef MGM_PIXEL_MEMINFO
 	register_meminfo(&gpu_meminfo);
+#endif
 	return 0;
 }
 
 static void mgm_sysfs_term(struct mgm_groups *data)
 {
+#ifdef MGM_PIXEL_MEMINFO
 	unregister_meminfo(&gpu_meminfo);
+#endif
 	kobject_put(&data->kobj);
 }
 
