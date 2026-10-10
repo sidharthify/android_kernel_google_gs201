@@ -32,34 +32,14 @@ struct gxp_dma_iommu_manager {
 
 /* Fault handler */
 
-static int iommu_fault_handler(struct iommu_fault *fault, void *token)
+static int iommu_fault_handler(struct iommu_domain *domain, struct device *dev,
+			       unsigned long iova, int flags, void *token)
 {
-	struct device *dev = token;
+	dev_err(dev, "IOMMU fault on address %08lX, flags = %08X
+", iova, flags);
 
-	switch (fault->type) {
-	case IOMMU_FAULT_DMA_UNRECOV:
-		dev_err(dev, "Unrecoverable IOMMU fault!\n");
-		dev_err(dev, "reason = %08X\n", fault->event.reason);
-		dev_err(dev, "flags = %08X\n", fault->event.flags);
-		dev_err(dev, "pasid = %08X\n", fault->event.pasid);
-		dev_err(dev, "perm = %08X\n", fault->event.perm);
-		dev_err(dev, "addr = %llX\n", fault->event.addr);
-		dev_err(dev, "fetch_addr = %llX\n", fault->event.fetch_addr);
-		break;
-	case IOMMU_FAULT_PAGE_REQ:
-		dev_err(dev, "IOMMU page request fault!\n");
-		dev_err(dev, "flags = %08X\n", fault->prm.flags);
-		dev_err(dev, "pasid = %08X\n", fault->prm.pasid);
-		dev_err(dev, "grpid = %08X\n", fault->prm.grpid);
-		dev_err(dev, "perm = %08X\n", fault->prm.perm);
-		dev_err(dev, "addr = %llX\n", fault->prm.addr);
-		break;
-	default:
-		dev_err(dev, "Unexpected IOMMU fault type (%d)\n", fault->type);
-	}
-
-	/* Tells the IOMMU driver to carry on. */
-	return -EAGAIN;
+	/* Tell the IOMMU driver we are OK with this fault. */
+	return 0;
 }
 
 #if GXP_HAS_LAP
@@ -124,10 +104,7 @@ int gxp_dma_init(struct gxp_dev *gxp)
 		return PTR_ERR(mgr->default_domain);
 	}
 
-	if (iommu_register_device_fault_handler(gxp->dev, iommu_fault_handler, gxp->dev)) {
-		dev_err(gxp->dev, "Failed to register iommu fault handler\n");
-		return -EIO;
-	}
+	iommu_set_fault_handler(mgr->default_domain->domain, iommu_fault_handler, gxp->dev);
 
 	gxp->dma_mgr = &(mgr->dma_mgr);
 
@@ -136,9 +113,6 @@ int gxp_dma_init(struct gxp_dev *gxp)
 
 void gxp_dma_exit(struct gxp_dev *gxp)
 {
-	if (iommu_unregister_device_fault_handler(gxp->dev))
-		dev_err(gxp->dev,
-			"Failed to unregister IOMMU fault handler\n");
 }
 
 #define EXT_TPU_MBX_SIZE 0x2000

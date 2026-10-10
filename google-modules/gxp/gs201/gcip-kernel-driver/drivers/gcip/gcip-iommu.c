@@ -21,6 +21,7 @@
 #include <linux/sched/mm.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 #include <gcip/gcip-config.h>
 #include <gcip/gcip-domain-pool.h>
@@ -140,7 +141,7 @@ static unsigned int gcip_iommu_domain_map_sg(struct gcip_iommu_domain *domain,
 #if GCIP_IOMMU_MAP_HAS_GFP
 	map_size = iommu_map_sg(domain->domain, iova, sgl, nents, prot, GFP_KERNEL);
 #else
-	map_size = iommu_map_sg(domain->domain, iova, sgl, nents, prot);
+	map_size = iommu_map_sg(domain->domain, iova, sgl, nents, prot, GFP_KERNEL);
 #endif
 	if (map_size < 0 || map_size < iova_len)
 		goto err_free_iova;
@@ -592,22 +593,30 @@ static int gcip_pin_user_pages(struct device *dev, struct page **pages, unsigned
 	dev_dbg(dev, "Failed to pin user pages in fast mode (ret=%d, addr=%lu, num_pages=%d)", ret,
 		start_addr, num_pages);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	/* Allocate our own vmas array non-contiguous. */
 	vmas = kvmalloc((num_pages * sizeof(*vmas)), GFP_KERNEL | __GFP_NOWARN);
 	if (!vmas)
 		return -ENOMEM;
+#endif
 
 	if (pin_user_pages_lock)
 		mutex_lock(pin_user_pages_lock);
 	mmap_read_lock(current->mm);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	ret = pin_user_pages(start_addr, num_pages, gup_flags, pages, vmas);
+#else
+	ret = pin_user_pages(start_addr, num_pages, gup_flags, pages);
+#endif
 
 	mmap_read_unlock(current->mm);
 	if (pin_user_pages_lock)
 		mutex_unlock(pin_user_pages_lock);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)
 	kvfree(vmas);
+#endif
 
 	if (ret < num_pages) {
 		if (ret > 0) {
@@ -760,7 +769,11 @@ static int _gcip_iommu_domain_pool_attach_domain(struct gcip_iommu_domain_pool *
 	if (pasid < 0)
 		return pasid;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
 	ret = iommu_attach_device_pasid(domain->domain, pool->dev, pasid);
+#else
+	ret = iommu_attach_device_pasid(domain->domain, pool->dev, pasid, NULL);
+#endif
 	if (ret) {
 		ida_free(&pool->pasid_pool, pasid);
 		return ret;
@@ -1319,7 +1332,7 @@ int gcip_iommu_map(struct gcip_iommu_domain *domain, dma_addr_t iova, phys_addr_
 #if GCIP_IOMMU_MAP_HAS_GFP
 	return iommu_map(domain->domain, iova, paddr, size, prot, GFP_KERNEL);
 #else
-	return iommu_map(domain->domain, iova, paddr, size, prot);
+	return iommu_map(domain->domain, iova, paddr, size, prot, GFP_KERNEL);
 #endif /* GCIP_IOMMU_MAP_HAS_GFP */
 }
 
