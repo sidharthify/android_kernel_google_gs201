@@ -37,6 +37,8 @@
  * through TouchComm command-response protocol.
  */
 
+#include <linux/pinctrl/consumer.h>
+
 #include "syna_tcm2.h"
 #include "syna_tcm2_platform.h"
 #include "synaptics_touchcom_core_dev.h"
