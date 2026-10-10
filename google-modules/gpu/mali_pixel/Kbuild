@@ -18,9 +18,6 @@
 #
 #
 
-# make $(src) as absolute path if it isn't already, by prefixing $(srctree)
-src:=$(if $(patsubst /%,,$(src)),$(srctree)/$(src),$(src))
-
 CONFIG_MALI_MEMORY_GROUP_MANAGER ?= m
 CONFIG_MALI_PRIORITY_CONTROL_MANAGER ?= m
 CONFIG_MALI_PROTECTED_MEMORY_ALLOCATOR ?= m
