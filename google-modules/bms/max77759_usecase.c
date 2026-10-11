@@ -1371,10 +1371,37 @@ static void gs101_setup_default_usecase(struct max77759_usecase_data *uc_data)
 	if (ret < 0)
 		uc_data->otg_vbyp = MAX77759_CHG_CNFG_11_OTG_VBYP_5100MV;
 }
+/* GPIO_ACTIVE_LOW in the devicetree gpio flags cell */
+#define UC_OF_GPIO_ACTIVE_LOW	BIT(0)
+
+/*
+ * of_get_named_gpio_flags() is gone since Linux 6.2. Only the active-low bit
+ * of the flags cell is used, so read the cell from the phandle args directly.
+ */
+static int uc_of_get_named_gpio_flags(struct device_node *node, const char *name,
+				      u32 *flags)
+{
+	struct of_phandle_args args;
+	int gpio;
+
+	gpio = of_get_named_gpio(node, name, 0);
+	if (gpio < 0)
+		return gpio;
+
+	*flags = 0;
+	if (!of_parse_phandle_with_args(node, name, "#gpio-cells", 0, &args)) {
+		if (args.args_count > 1)
+			*flags = args.args[1];
+		of_node_put(args.np);
+	}
+
+	return gpio;
+}
+
 bool gs101_setup_usecases(struct max77759_usecase_data *uc_data,
 			  struct device_node *node)
 {
-	enum of_gpio_flags flags = 0;
+	u32 flags = 0;
 
 	if (!node) {
 		gs101_setup_default_usecase(uc_data);
@@ -1391,10 +1418,10 @@ bool gs101_setup_usecases(struct max77759_usecase_data *uc_data,
 
 	/* for enabling charging over pogo */
 	if (uc_data->pogo_ovp_en == -EPROBE_DEFER) {
-		uc_data->pogo_ovp_en = of_get_named_gpio_flags(node, "max77759,pogo-ovp-en", 0,
-							       &flags);
+		uc_data->pogo_ovp_en = uc_of_get_named_gpio_flags(node, "max77759,pogo-ovp-en",
+								  &flags);
 		if (uc_data->pogo_ovp_en >= 0)
-			uc_data->pogo_ovp_en_act_low = (flags & OF_GPIO_ACTIVE_LOW) ? 1 : 0;
+			uc_data->pogo_ovp_en_act_low = (flags & UC_OF_GPIO_ACTIVE_LOW) ? 1 : 0;
 	}
 	if (uc_data->pogo_vout_en == -EPROBE_DEFER) {
 		uc_data->pogo_vout_en = of_get_named_gpio(node, "max77759,pogo-vout-sw-en", 0);

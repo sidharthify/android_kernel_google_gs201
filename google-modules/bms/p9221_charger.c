@@ -7137,15 +7137,42 @@ static int p9221_parse_hpp_fods(struct device *dev,
 	return 0;
 }
 
+/* GPIO_ACTIVE_LOW in the devicetree gpio flags cell */
+#define P9221_OF_GPIO_ACTIVE_LOW	BIT(0)
+
+/*
+ * of_get_named_gpio_flags() is gone since Linux 6.2. Only the active-low bit
+ * of the flags cell is used, so read the cell from the phandle args directly.
+ */
+static int p9221_of_get_named_gpio_flags(struct device_node *node, const char *name,
+					 u32 *flags)
+{
+	struct of_phandle_args args;
+	int gpio;
+
+	gpio = of_get_named_gpio(node, name, 0);
+	if (gpio < 0)
+		return gpio;
+
+	*flags = 0;
+	if (!of_parse_phandle_with_args(node, name, "#gpio-cells", 0, &args)) {
+		if (args.args_count > 1)
+			*flags = args.args[1];
+		of_node_put(args.np);
+	}
+
+	return gpio;
+}
+
 static int p9221_parse_gpios(struct device *dev, char *of_name_1, char *of_name_2,
-			     enum of_gpio_flags *flags)
+			     u32 *flags)
 {
 	int ret_1, ret_2 = 0;
 	struct device_node *node = dev->of_node;
 
-	ret_1 = of_get_named_gpio_flags(node, of_name_1, 0, flags);
+	ret_1 = p9221_of_get_named_gpio_flags(node, of_name_1, flags);
 	if (ret_1 < 0)
-		ret_2 = of_get_named_gpio_flags(node, of_name_2, 0, flags);
+		ret_2 = p9221_of_get_named_gpio_flags(node, of_name_2, flags);
 
 	if (ret_1 == -EPROBE_DEFER || ret_2 == -EPROBE_DEFER)
 		return -EPROBE_DEFER;
@@ -7170,7 +7197,7 @@ static int p9221_parse_dt(struct device *dev,
 	int vout_set_max_mv = P9221_VOUT_SET_MAX_MV;
 	int vout_set_min_mv = P9221_VOUT_SET_MIN_MV;
 	int nb_hpp_fod_vol;
-	enum of_gpio_flags flags = 0;
+	u32 flags = 0;
 
 	if (of_device_is_compatible(node, "idt,p9412")) {
 		dev_info(dev, "selecting p9412\n");
@@ -7207,7 +7234,7 @@ static int p9221_parse_dt(struct device *dev,
 	if (pdata->qi_vbus_en == -EPROBE_DEFER)
 		return -EPROBE_DEFER;
 	if (pdata->qi_vbus_en > 0) {
-		pdata->qi_vbus_en_act_low = (flags & OF_GPIO_ACTIVE_LOW) != 0;
+		pdata->qi_vbus_en_act_low = (flags & P9221_OF_GPIO_ACTIVE_LOW) != 0;
 		dev_info(dev, "QI_USB_VBUS_EN gpio:%d(act_low=%d)",
 			 pdata->qi_vbus_en, pdata->qi_vbus_en_act_low);
 	}
@@ -7217,7 +7244,7 @@ static int p9221_parse_dt(struct device *dev,
 	if (pdata->wlc_en == -EPROBE_DEFER)
 		return -EPROBE_DEFER;
 	if (pdata->wlc_en > 0) {
-		pdata->wlc_en_act_low = (flags & OF_GPIO_ACTIVE_LOW) != 0;
+		pdata->wlc_en_act_low = (flags & P9221_OF_GPIO_ACTIVE_LOW) != 0;
 		dev_info(dev, "WLC enable/disable pin:%d(act_low=%d)",
 			 pdata->wlc_en, pdata->wlc_en_act_low);
 	}
@@ -8397,9 +8424,9 @@ static int p9221_charger_probe(struct i2c_client *client)
 	    charger->pdata->chip_id == RA9530_CHIP_ID) {
 		p9xxx_gpio_init(charger);
 		charger->gpio.parent = &client->dev;
-		charger->gpio.of_node = of_find_node_by_name(client->dev.of_node,
-						charger->gpio.label);
-		if (!charger->gpio.of_node)
+		charger->gpio.fwnode = of_fwnode_handle(of_find_node_by_name(client->dev.of_node,
+									     charger->gpio.label));
+		if (!charger->gpio.fwnode)
 			dev_err(&client->dev, "Failed to find %s DT node\n",
 				charger->gpio.label);
 

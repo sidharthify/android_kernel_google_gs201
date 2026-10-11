@@ -430,7 +430,7 @@ static int max77779_pmic_sgpio_probe(struct platform_device *pdev)
 	gpio_chip->set_config = gpiochip_generic_config;
 	gpio_chip->base = -1;
 	gpio_chip->can_sleep = true;
-	gpio_chip->of_node = dev->of_node;
+	gpio_chip->fwnode = dev_fwnode(dev);
 	gpio_chip->ngpio = MAX77779_SGPIO_NUM_GPIOS;
 
 	gpio_irq_chip_set_chip(&gpio_chip->irq, &max77779_pmic_sgpio_irq_chip);
