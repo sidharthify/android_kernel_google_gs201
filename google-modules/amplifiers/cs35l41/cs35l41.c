@@ -228,7 +228,7 @@ static int cs35l41_dsp_power_ev(struct snd_soc_dapm_widget *w,
 		snd_soc_dapm_to_component(w->dapm);
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
-	dev_info(cs35l41->dev, "%s: event: %d halo_booted: %d\n",
+	dev_dbg(cs35l41->dev, "%s: event: %d halo_booted: %d\n",
 				__func__, event, cs35l41->halo_booted);
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
@@ -352,7 +352,7 @@ static int cs35l41_bp_current_limit_put(struct snd_kcontrol *kcontrol,
 		dev_err(cs35l41->dev, "Failed to write peak current limit\n");
 		return ret;
 	} else {
-		dev_info(cs35l41->dev, "%s: value %d\n",
+		dev_dbg(cs35l41->dev, "%s: value %d\n",
 				__func__, cs35l41->pdata.bst_ipk);
 	}
 
@@ -630,7 +630,7 @@ static int cs35l41_hibernate_force_wake_put(struct snd_kcontrol *kcontrol,
 	unsigned int amp_active;
 
 	regmap_read(cs35l41->regmap, CS35L41_PWR_CTRL1, &amp_active);
-	dev_info(cs35l41->dev, "hb force wake %d from hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "hb force wake %d from hibernate state %d\n",
 		cs35l41->hibernate_force_wake, cs35l41->amp_hibernate);
 
 	mutex_lock(&cs35l41->hb_forcewake_lock);
@@ -941,6 +941,13 @@ static const char * const cs35l41_boost_current_limit_text[] = {
 static SOC_ENUM_SINGLE_DECL(current_limit, CS35L41_BSTCVRT_PEAK_CUR,
 				CS35L41_BST_IPK_SHIFT,
 				cs35l41_boost_current_limit_text);
+
+static const char * const cs35l41_noise_gate_delay_text[] =  {
+	"5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1000ms"};
+
+static SOC_ENUM_SINGLE_DECL(cs35l41_noise_gate_delay,
+			    CS35L41_NG_CFG, CS35L41_HW_NG_DLY_SHIFT,
+			    cs35l41_noise_gate_delay_text);
 
 static int cs35l41_reload_tuning_get(struct snd_kcontrol *kcontrol,
 				     struct snd_ctl_elem_value *ucontrol)
@@ -1831,6 +1838,7 @@ static const struct snd_kcontrol_new cs35l41_aud_controls[] = {
 #endif
 	SOC_SINGLE_EXT("Default 96K", SND_SOC_NOPM, 0, 1, 0,
 			cs35l41_default_96k_get, cs35l41_default_96k_put),
+	SOC_ENUM("Noise Gate Delay", cs35l41_noise_gate_delay),
 };
 
 static const struct cs35l41_otp_map_element_t *cs35l41_find_otp_map(u32 otp_id)
@@ -2192,7 +2200,7 @@ static int cs35l41_hibernate(struct snd_soc_dapm_widget *w,
 	struct cs35l41_private *cs35l41 =
 		snd_soc_component_get_drvdata(component);
 	int ret = 0;
-	dev_info(cs35l41->dev, "%s event 0x%x hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "%s event 0x%x hibernate state %d\n",
 		__func__, event, cs35l41->amp_hibernate);
 	if (!cs35l41->dsp.running ||
 	     cs35l41->amp_hibernate == CS35L41_HIBERNATE_INCOMPATIBLE)
@@ -2266,7 +2274,7 @@ static int cs35l41_main_amp_event(struct snd_soc_dapm_widget *w,
 	bool pdn;
 	unsigned int val;
 
-	dev_info(cs35l41->dev, "main amp event %d", event);
+	dev_dbg(cs35l41->dev, "main amp event %d", event);
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
 		regmap_multi_reg_write_bypassed(cs35l41->regmap,
@@ -3767,7 +3775,7 @@ static int cs35l41_enter_hibernate(struct cs35l41_private *cs35l41)
 {
 	int i;
 
-	dev_info(cs35l41->dev, "%s: hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "%s: hibernate state %d\n",
 		__func__, cs35l41->amp_hibernate);
 
 	if (cs35l41->amp_hibernate == CS35L41_HIBERNATE_STANDBY)
@@ -3778,6 +3786,7 @@ static int cs35l41_enter_hibernate(struct cs35l41_private *cs35l41)
 		regmap_read(cs35l41->regmap, cs35l41_ctl_cache_regs[i],
 			    &cs35l41->ctl_cache[i]);
 
+	disable_irq(cs35l41->irq);
 	/* Disable interrupts */
 	regmap_write(cs35l41->regmap, CS35L41_IRQ1_MASK1, 0xFFFFFFFF);
 
@@ -3823,7 +3832,7 @@ static int cs35l41_exit_hibernate(struct cs35l41_private *cs35l41)
 	int retries = 5, i;
 	u32 *p_trim_data;
 
-	dev_info(cs35l41->dev, "%s: hibernate state %d\n",
+	dev_dbg(cs35l41->dev, "%s: hibernate state %d\n",
 		__func__, cs35l41->amp_hibernate);
 
 	if (cs35l41->amp_hibernate != CS35L41_HIBERNATE_STANDBY)
@@ -3921,6 +3930,8 @@ static int cs35l41_exit_hibernate(struct cs35l41_private *cs35l41)
 		ret = cs35l41_restore(cs35l41);
 		usleep_range(4000, 5000);
 	} while (ret < 0 && --retries > 0);
+
+	enable_irq(cs35l41->irq);
 
 	if (retries <= 0)
 		dev_err(cs35l41->dev, "Failed to exit from hibernate\n");

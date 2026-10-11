@@ -797,11 +797,13 @@ static int cs40l2x_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void cs40l2x_remove(struct platform_device *pdev)
+static int cs40l2x_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
 
 	snd_soc_unregister_component(&pdev->dev);
+
+	return 0;
 }
 
 static struct platform_driver cs40l2x_codec_driver = {

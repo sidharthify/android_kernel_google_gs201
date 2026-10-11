@@ -58,7 +58,8 @@ static const struct i2c_device_id cs35l41_id_i2c[] = {
 
 MODULE_DEVICE_TABLE(i2c, cs35l41_id_i2c);
 
-static int cs35l41_i2c_probe(struct i2c_client *client)
+static int cs35l41_i2c_probe(struct i2c_client *client,
+				const struct i2c_device_id *id)
 {
 	struct cs35l41_private *cs35l41;
 	struct device *dev = &client->dev;

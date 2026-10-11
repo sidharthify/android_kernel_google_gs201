@@ -1453,7 +1453,8 @@ EXIT:
 	return rc;
 }
 
-static int tas256x_i2c_probe(struct i2c_client *p_client)
+static int tas256x_i2c_probe(struct i2c_client *p_client,
+			const struct i2c_device_id *id)
 {
 	struct tas256x_priv *p_tas256x;
 	struct linux_platform *plat_data;

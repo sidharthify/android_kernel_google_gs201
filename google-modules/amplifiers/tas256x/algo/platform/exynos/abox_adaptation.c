@@ -239,7 +239,6 @@ static int samsung_abox_adaptation_probe(struct platform_device *pdev)
 	}
 
 	data->pdev_abox = of_find_device_by_node(np_abox);
-	of_node_put(np_abox);
 	if (!data->pdev_abox) {
 		dev_err(dev, "Failed to get abox platform device\n");
 		return -EPROBE_DEFER;

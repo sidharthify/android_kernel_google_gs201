@@ -3172,7 +3172,7 @@ int wm_adsp2_preloader_put(struct snd_kcontrol *kcontrol,
 	if (dsp->preloaded == ucontrol->value.integer.value[0])
 		return 0;
 	snprintf(preload, ARRAY_SIZE(preload), "%s Preload", dsp->name);
-	adsp_info(dsp, "%s: preload name: %s old value: %d new value: %ld",
+	adsp_dbg(dsp, "%s: preload name: %s old value: %d new value: %ld",
 			__func__, preload, dsp->preloaded,
 			ucontrol->value.integer.value[0]);
 
@@ -3527,22 +3527,22 @@ int wm_adsp_compr_open(struct wm_adsp *dsp, struct snd_compr_stream *stream)
 
 	if (wm_adsp_fw[dsp->fw].num_caps == 0) {
 		adsp_err(dsp, "%s: Firmware does not support compressed API\n",
-			 snd_soc_rtd_to_codec(rtd, 0)->name);
+			 asoc_rtd_to_codec(rtd, 0)->name);
 		ret = -ENXIO;
 		goto out;
 	}
 
 	if (wm_adsp_fw[dsp->fw].compr_direction != stream->direction) {
 		adsp_err(dsp, "%s: Firmware does not support stream direction\n",
-			 snd_soc_rtd_to_codec(rtd, 0)->name);
+			 asoc_rtd_to_codec(rtd, 0)->name);
 		ret = -EINVAL;
 		goto out;
 	}
 
 	list_for_each_entry(tmp, &dsp->compr_list, list) {
-		if (!strcmp(tmp->name, snd_soc_rtd_to_codec(rtd, 0)->name)) {
+		if (!strcmp(tmp->name, asoc_rtd_to_codec(rtd, 0)->name)) {
 			adsp_err(dsp, "%s: Only a single stream supported per dai\n",
-				 snd_soc_rtd_to_codec(rtd, 0)->name);
+				 asoc_rtd_to_codec(rtd, 0)->name);
 			ret = -EBUSY;
 			goto out;
 		}
@@ -3556,7 +3556,7 @@ int wm_adsp_compr_open(struct wm_adsp *dsp, struct snd_compr_stream *stream)
 
 	compr->dsp = dsp;
 	compr->stream = stream;
-	compr->name = snd_soc_rtd_to_codec(rtd, 0)->name;
+	compr->name = asoc_rtd_to_codec(rtd, 0)->name;
 
 	list_add_tail(&compr->list, &dsp->compr_list);
 

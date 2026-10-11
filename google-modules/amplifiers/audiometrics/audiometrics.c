@@ -1220,9 +1220,9 @@ static long amcs_cdev_compat_ioctl(struct file *file, unsigned int cmd, unsigned
 #define amcs_cdev_compat_ioctl NULL;
 #endif
 
-static char *amcs_devnode(const struct device *dev, umode_t *mode)
+static char *amcs_devnode(struct device *dev, umode_t *mode)
 {
-	const struct audiometrics_priv_type *priv;
+	struct audiometrics_priv_type *priv = NULL;
 
 	if (!mode || !dev)
 		return NULL;
@@ -1363,7 +1363,7 @@ static int amcs_init_cdev(struct audiometrics_priv_type *priv)
 
 	priv->amcs_major = MAJOR(priv->amcs_dev);
 
-	priv->class = class_create(AMCS_CDEV_NAME);
+	priv->class = class_create(THIS_MODULE, AMCS_CDEV_NAME);
 	if (!priv->class) {
 		dev_err(&amcs_pdev->dev, "Failed to create amcs class\n");
 		ret = -ENXIO;
@@ -1451,7 +1451,7 @@ err_amcs_init_cdev:
 	return err;
 }
 
-static void audiometrics_platform_remove(struct platform_device *pdev)
+static int audiometrics_platform_remove(struct platform_device *pdev)
 {
 	struct audiometrics_priv_type *priv = dev_get_drvdata(&pdev->dev);
 
@@ -1459,6 +1459,7 @@ static void audiometrics_platform_remove(struct platform_device *pdev)
 	sysfs_remove_group(&pdev->dev.kobj, &audiometrics_fs_attr_group);
 	mutex_destroy(&priv->lock);
 	devm_kfree(&pdev->dev, priv);
+	return 0;
 }
 
 struct platform_driver audiometrics_driver = {
