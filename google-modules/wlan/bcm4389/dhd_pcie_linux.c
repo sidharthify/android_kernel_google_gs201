@@ -1,7 +1,7 @@
 /*
  * Linux DHD Bus Module for PCIE
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -270,6 +270,7 @@ static const struct dev_pm_ops dhd_pcie_pm_ops = {
 #endif /* DHD_PCIE_RUNTIMEPM */
 
 static struct pci_driver dhdpcie_driver = {
+	node:		{&dhdpcie_driver.node, &dhdpcie_driver.node},
 	name:		"pcieh",
 	id_table:	dhdpcie_pci_devid,
 	probe:		dhdpcie_pci_probe,
@@ -288,11 +289,11 @@ char dhd_suspend_resume_time_str[DEBUG_DUMP_TIME_BUF_LEN];
 static int dhdpcie_smmu_init(struct pci_dev *pdev, void *smmu_cxt)
 {
 	struct dma_iommu_mapping *mapping;
-	struct device_node *root_node;
+	struct device_node *root_node = NULL;
 	dhdpcie_smmu_info_t *smmu_info = (dhdpcie_smmu_info_t *)smmu_cxt;
 	int smmu_iova_address[2];
-	const char *wlan_node = "android,bcmdhd_wlan";
-	const char *wlan_smmu_node = "wlan-smmu-iova-address";
+	char *wlan_node = "android,bcmdhd_wlan";
+	char *wlan_smmu_node = "wlan-smmu-iova-address";
 	int atomic_ctx = 1;
 	int s1_bypass = 1;
 	int ret = 0;
@@ -305,10 +306,8 @@ static int dhdpcie_smmu_init(struct pci_dev *pdev, void *smmu_cxt)
 		return -ENODEV;
 	}
 
-	ret = of_property_read_u32_array(root_node, wlan_smmu_node,
-					 smmu_iova_address, 2);
-	of_node_put(root_node);
-	if (ret == 0) {
+	if (of_property_read_u32_array(root_node, wlan_smmu_node,
+		smmu_iova_address, 2) == 0) {
 		DHD_ERROR(("%s : get SMMU start address 0x%x, size 0x%x\n",
 			__FUNCTION__, smmu_iova_address[0], smmu_iova_address[1]));
 		smmu_info->smmu_iova_start = smmu_iova_address[0];
@@ -3474,6 +3473,10 @@ bool dhd_runtime_bus_wake(dhd_bus_t *bus, bool wait, void *func_addr)
 
 		/* If wait is TRUE, function with wait = TRUE will be wait in here  */
 		if (wait) {
+			if (!dhd_is_rpm_thread_alive(bus->dhd)) {
+				DHD_ERROR(("%s: RPM thread is terminated\n", __FUNCTION__));
+				return FALSE;
+			}
 			if (!wait_event_timeout(bus->rpm_queue, bus->runtime_resume_done,
 					msecs_to_jiffies(RPM_WAKE_UP_TIMEOUT))) {
 				DHD_ERROR(("%s: RPM_WAKE_UP_TIMEOUT error\n", __FUNCTION__));

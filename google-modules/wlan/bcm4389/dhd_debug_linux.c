@@ -1,7 +1,7 @@
 /*
  * DHD debugability Linux os layer
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -32,7 +32,6 @@
 #include <dhd_dbg.h>
 #include <dhd_debug.h>
 
-#include <linux/sched/clock.h>
 #include <net/cfg80211.h>
 #include <wl_cfgvendor.h>
 

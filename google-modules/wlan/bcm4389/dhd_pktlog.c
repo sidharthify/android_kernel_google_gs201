@@ -1,7 +1,7 @@
 /*
  * DHD debugability packet logging support
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -33,7 +33,6 @@
 #include <dhd_pktlog.h>
 #include <dhd_wlfc.h>
 #include <dhd_debug.h>
-#include <linux/sched/clock.h>
 
 #ifdef DHD_COMPACT_PKT_LOG
 #include <bcmip.h>

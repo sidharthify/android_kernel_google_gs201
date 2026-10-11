@@ -1,6 +1,6 @@
 # bcmdhd
 #
-# Copyright (C) 2024, Broadcom.
+# Copyright (C) 2025, Broadcom.
 #
 #      Unless you and Broadcom execute a separate written software license
 # agreement governing use of this software, this software is licensed to you
@@ -26,11 +26,19 @@ ifeq ($(KERNEL_SRC),)
  ifeq ($(srctree),.)
   BCMDHD_ROOT=$(src)
  else
-  BCMDHD_ROOT=$(src)
+  BCMDHD_ROOT=$(srctree)/$(src)
  endif
  $(warning : ** Regular in-tree build BCMDHD_ROOT=$(BCMDHD_ROOT)**)
 else
  $(warning : ** out-of-tree Kbuild BCMDHD_ROOT=$(BCMDHD_ROOT)**)
+endif
+
+# For pixel build, unset SOC related configs which are defined in DHD
+ifneq ($(CONFIG_SOC_GOOGLE),)
+  # Find configs in DHD code with prefix "CONFIG_ARCH_"
+  ARCH_CONFIGS := $(shell grep -rEoh "CONFIG_ARCH_([0-9]|[A-Z]|_)+" $(BCMDHD_ROOT)/* | sort | uniq)
+  # Unset these CONFIG_ARCH_* configs if it is defined in kernel layer
+  $(foreach var, $(ARCH_CONFIGS), $(eval $(var) :=))
 endif
 
 #####################
@@ -174,7 +182,6 @@ ifneq ($(CONFIG_FIB_RULES),)
 DHDCFLAGS += -DDEBUGABILITY
 DHDCFLAGS += -DDEBUGABILITY_DISABLE_MEMDUMP
 DHDCFLAGS += -DDHD_DEBUGABILITY_LOG_DUMP_RING
-DHDCFLAGS += -DDHD_PKT_LOGGING_DBGRING
 ifneq ($(CONFIG_SOC_GOOGLE),)
 DHDCFLAGS += -DDHD_ECNTRS_EXPOSED_DBGRING
 endif
@@ -249,6 +256,7 @@ ifneq ($(CONFIG_SOC_GOOGLE),)
 	DHDCFLAGS += -DCLEAN_IRQ_AFFINITY_HINT
 	DHDCFLAGS += -DIRQ_AFFINITY_BIG_CORE=4
 	DHDCFLAGS += -DIRQ_AFFINITY_SMALL_CORE=4
+	DHDCFLAGS += -DWAKEUP_KSOFTIRQD_POST_NAPI_SCHEDULE
 	# Tx/Rx tasklet bounds
 	DHDCFLAGS += -DDHD_TX_CPL_BOUND=64
 	DHDCFLAGS += -DDHD_TX_POST_BOUND=128
@@ -407,7 +415,6 @@ ifneq ($(CONFIG_BCMDHD_PCIE),)
 endif
 DHDCFLAGS += -DENABLE_BCN_LI_BCN_WAKEUP
 # Hang
-DHDCFLAGS += -DDHD_HANG_SEND_UP_TEST
 DHDCFLAGS += -DDHD_USE_EXTENDED_HANG_REASON
 DHDCFLAGS += -DPREVENT_REOPEN_DURING_HANG
 DHDCFLAGS += -DSUPPORT_LINKDOWN_RECOVERY
@@ -419,7 +426,6 @@ DHDCFLAGS += -DDHD_DHCP_DUMP
 DHDCFLAGS += -DDHD_ICMP_DUMP
 DHDCFLAGS += -DDHD_ARP_DUMP
 DHDCFLAGS += -DDHD_DNS_DUMP
-DHDCFLAGS += -DDHD_PKT_LOGGING
 DHDCFLAGS += -DDHD_PKTDUMP_ROAM
 DHDCFLAGS += -DDHD_RANDMAC_LOGGING
 DHDCFLAGS += -DDHD_STATUS_LOGGING
@@ -901,7 +907,6 @@ endif
 DHDCFLAGS += -DENABLE_INSMOD_NO_FW_LOAD
 
 ifeq ($(DRIVER_TYPE),y)
-  DHDCFLAGS += -DWAKEUP_KSOFTIRQD_POST_NAPI_SCHEDULE
   DHDCFLAGS += -DUSE_LATE_INITCALL_SYNC
   # Use kernel strlcpy() implementation instead of one, defined in bcmstdlib_s.c
   DHDCFLAGS += -DBCM_USE_PLATFORM_STRLCPY
@@ -927,7 +932,7 @@ ifneq ($(CONFIG_SOC_GOOGLE),)
 	# LB RXP Flow control to avoid OOM
 	DHDCFLAGS += -DLB_RXP_STOP_THR=500 -DLB_RXP_STRT_THR=499
 	# Dongle init fail
-	DHDCFLAGS += -DPOWERUP_MAX_RETRY=0
+	DHDCFLAGS += -DPOWERUP_MAX_RETRY=1
 	# Explicitly disable Softap 6G
 	DHDCFLAGS += -DWL_DISABLE_SOFTAP_6G
 ifneq ($(filter y, $(CONFIG_BCM4389)),)

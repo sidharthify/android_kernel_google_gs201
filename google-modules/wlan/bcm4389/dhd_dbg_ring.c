@@ -1,7 +1,7 @@
 /*
  * DHD debug ring API and structures - implementation
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,6 @@
 #include <typedefs.h>
 #include <osl.h>
 #include <bcmutils.h>
-#include <bcmstdlib_s.h>
 #include <bcmendian.h>
 #include <dngl_stats.h>
 #include <dhd.h>

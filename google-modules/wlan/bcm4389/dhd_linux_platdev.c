@@ -1,7 +1,7 @@
 /*
  * Linux platform device for DHD WLAN adapter
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -23,7 +23,6 @@
  * $Id$
  */
 #include <typedefs.h>
-#include <linux/cleanup.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -381,7 +380,7 @@ static int wifi_plat_dev_drv_probe(struct platform_device *pdev)
 	return wifi_plat_dev_probe_ret;
 }
 
-static void wifi_plat_dev_drv_remove(struct platform_device *pdev)
+static int wifi_plat_dev_drv_remove(struct platform_device *pdev)
 {
 	wifi_adapter_info_t *adapter;
 
@@ -404,6 +403,7 @@ static void wifi_plat_dev_drv_remove(struct platform_device *pdev)
 #ifdef CONFIG_DTS
 	regulator_put(wifi_regulator);
 #endif /* CONFIG_DTS */
+	return 0;
 }
 
 static int wifi_plat_dev_drv_suspend(struct platform_device *pdev, pm_message_t state)
@@ -631,7 +631,7 @@ static int bcmdhd_wifi_plat_dev_drv_probe(struct platform_device *pdev)
 	return dhd_wifi_platform_load();
 }
 
-static void bcmdhd_wifi_plat_dev_drv_remove(struct platform_device *pdev)
+static int bcmdhd_wifi_plat_dev_drv_remove(struct platform_device *pdev)
 {
 	int i;
 	wifi_adapter_info_t *adapter;
@@ -643,6 +643,7 @@ static void bcmdhd_wifi_plat_dev_drv_remove(struct platform_device *pdev)
 		wifi_platform_set_power(adapter, FALSE, WIFI_TURNOFF_DELAY);
 		wifi_platform_bus_enumerate(adapter, FALSE);
 	}
+	return 0;
 }
 
 static struct platform_driver dhd_wifi_platform_dev_driver = {
@@ -984,7 +985,7 @@ void
 concate_custom_board_revision(char *nv_path)
 {
 	uint32 board_revision = 0;
-	struct device_node *root_node __free(device_node) = NULL;
+	struct device_node *root_node = NULL;
 	char* wlan_node = NULL;
 
 	if (!nv_path) {

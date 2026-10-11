@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 Vendor Extension Code
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -34,7 +34,6 @@
 #include <bcmstdlib_s.h>
 
 #include <bcmutils.h>
-#include <bcmstdlib_s.h>
 #include <bcmwifi_channels.h>
 #include <bcmendian.h>
 #include <ethernet.h>
@@ -67,7 +66,6 @@
 #include <linux/kthread.h>
 #include <linux/netdevice.h>
 #include <linux/sched.h>
-#include <linux/sched/clock.h>
 #include <linux/etherdevice.h>
 #include <linux/wireless.h>
 #include <linux/ieee80211.h>
@@ -6930,6 +6928,9 @@ wl_cfgvendor_nan_stop_handler(struct wiphy *wiphy,
 	}
 exit:
 	mutex_unlock(&cfg->if_sync);
+	if (cmd_data) {
+		MFREE(cfg->osh, cmd_data, sizeof(*cmd_data));
+	}
 	NAN_DBG_EXIT();
 	return ret;
 }

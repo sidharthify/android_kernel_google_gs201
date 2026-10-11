@@ -1,7 +1,7 @@
 /*
  * Wifi Virtual Interface implementaion
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -930,7 +930,6 @@ wl_release_vif_macaddr(struct bcm_cfg80211 *cfg, u8 *mac_addr, u16 wl_iftype)
 #ifdef WL_NAN
 	if (!((cfg->nancfg->mac_rand) && (wl_iftype == WL_IF_TYPE_NAN)))
 #endif /* WL_NAN */
-#line 902
 	{
 		/* Fetch last two bytes of mac address */
 		org_toggle_bytes = ntoh16(*((u16 *)&ndev->dev_addr[4]));
@@ -938,14 +937,14 @@ wl_release_vif_macaddr(struct bcm_cfg80211 *cfg, u8 *mac_addr, u16 wl_iftype)
 
 		toggled_bit = (org_toggle_bytes ^ cur_toggle_bytes);
 		WL_DBG(("org_toggle_bytes:%04X cur_toggle_bytes:%04X\n",
-					org_toggle_bytes, cur_toggle_bytes));
+			org_toggle_bytes, cur_toggle_bytes));
 		if (toggled_bit & cfg->vif_macaddr_mask) {
 			/* This toggled_bit is marked in the used mac addr
 			 * mask. Clear it.
 			 */
 			cfg->vif_macaddr_mask &= ~toggled_bit;
-			WL_INFORM(("MAC address - "
-				MACDBG " released. toggled_bit:%04X vif_mask:%04X\n",
+			WL_INFORM(("MAC address - " MACDBG " released. toggled_bit:%04X"
+				" vif_mask:%04X\n",
 				MAC2STRDBG(mac_addr), toggled_bit, cfg->vif_macaddr_mask));
 		} else {
 			WL_ERR(("MAC address - " MACDBG " not found in the used list."
@@ -4257,12 +4256,14 @@ exit:
 	return err;
 }
 
-int wl_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
-			      struct cfg80211_ap_update *params)
+s32
+wl_cfg80211_change_beacon(
+	struct wiphy *wiphy,
+	struct net_device *dev,
+	struct cfg80211_beacon_data *info)
 {
 	s32 err = BCME_OK;
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
-	struct cfg80211_beacon_data *info = &params->beacon;
 	struct parsed_ies ies;
 	u32 dev_role = 0;
 	s32 bssidx = 0;
@@ -5017,17 +5018,10 @@ wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
 s32 wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
 	const u8 *peer, u8 action_code, u8 dialog_token, u16 status_code,
 	u32 peer_capability, const u8 *buf, size_t len)
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) &&	\
-       (LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)))
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0))
 s32 wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
        const u8 *peer, u8 action_code, u8 dialog_token, u16 status_code,
        u32 peer_capability, bool initiator, const u8 *buf, size_t len)
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0))
-int wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
-			  const u8 *peer, int link_id,
-			  u8 action_code, u8 dialog_token, u16 status_code,
-			  u32 peer_capability, bool initiator,
-			  const u8 *buf, size_t len)
 #else /* CONFIG_ARCH_MSM && TDLS_MGMT_VERSION2 */
 s32
 wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
@@ -5459,6 +5453,7 @@ int wl_chspec_chandef(chanspec_t chanspec,
 			chan_type = NL80211_CHAN_HT20;
 			break;
 		case WL_CHANSPEC_BW_40:
+#ifdef WL_FORCE_40BW_CHANDEF
 		{
 			if (CHSPEC_SB_UPPER(chanspec)) {
 				channel += CH_10MHZ_APART;
@@ -5467,6 +5462,11 @@ int wl_chspec_chandef(chanspec_t chanspec,
 			}
 		}
 			chan_type = NL80211_CHAN_HT40PLUS;
+#else
+			/* Use 20MHz BW for chandef */
+			channel = wf_chspec_primary20_chan(chanspec);
+			chan_type = NL80211_CHAN_HT20;
+#endif
 			break;
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION (3, 8, 0))
@@ -5567,9 +5567,7 @@ wl_cfg80211_ch_switch_notify(struct net_device *dev, uint16 chanspec, struct wip
 	}
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION (3, 8, 0))
 	freq = chandef.chan ? chandef.chan->center_freq : chandef.center_freq1;
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)) || defined(WL_CH_SWITCH_BKPORT)
-	cfg80211_ch_switch_notify(dev, &chandef, 0);
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)) || defined(WL_CH_SWITCH_BKPORT)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)) || defined(WL_CH_SWITCH_BKPORT)
 	/* force set link_id and pucturing bitmap as 0  */
 	cfg80211_ch_switch_notify(dev, &chandef, 0, 0);
 #elif (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 2)) || defined(WL_MLO_BKPORT)

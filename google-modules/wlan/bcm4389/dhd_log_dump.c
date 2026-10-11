@@ -1,7 +1,7 @@
 /*
  * log_dump - debugability support for dumping logs to file
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,6 @@
 #ifdef DHD_LOG_DUMP
 
 #include <osl.h>
-#include <linux/sched/clock.h>
 #include <bcmutils.h>
 #include <bcmendian.h>
 #include <bcmstdlib_s.h>

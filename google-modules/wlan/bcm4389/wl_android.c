@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver - Android related functions
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -4914,8 +4914,8 @@ static int wl_android_get_p2p_dev_addr(struct net_device *ndev, char *command, i
 	int ret;
 	struct ether_addr p2pdev_addr;
 
-#define P2P_DEV_ADDR_STR_LEN 18
-	if (total_len < P2P_DEV_ADDR_STR_LEN) {
+#define MAC_ADDR_STR_LEN 18
+	if (total_len < MAC_ADDR_STR_LEN) {
 		DHD_ERROR(("wl_android_get_p2p_dev_addr: buflen %d is less than p2p dev addr\n",
 			total_len));
 		return -1;

@@ -1,7 +1,7 @@
 /*
  * Wifi Virtual Interface implementaion
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -160,17 +160,10 @@ extern s32 wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
 extern s32 wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
 	const u8 *peer, u8 action_code, u8 dialog_token, u16 status_code,
 	u32 peer_capability, const u8 *buf, size_t len);
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) &&	\
-       (LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)))
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0))
 extern s32 wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
        const u8 *peer, u8 action_code, u8 dialog_token, u16 status_code,
        u32 peer_capability, bool initiator, const u8 *buf, size_t len);
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0))
-int wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
-			  const u8 *peer, int link_id,
-			  u8 action_code, u8 dialog_token, u16 status_code,
-			  u32 peer_capability, bool initiator,
-			  const u8 *buf, size_t len);
 #else /* CONFIG_ARCH_MSM && TDLS_MGMT_VERSION2 */
 extern s32 wl_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
 	u8 *peer, u8 action_code, u8 dialog_token, u16 status_code,
@@ -202,6 +195,8 @@ extern s32 wl_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev, unsi
 #else
 extern s32 wl_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev);
 #endif /* LINUX_VERSION_CODE > KERNEL_VERSION(5, 19, 0) || WL_MLO_BKPORT */
+extern s32 wl_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
+	struct cfg80211_beacon_data *info);
 #else
 extern s32 wl_cfg80211_add_set_beacon(struct wiphy *wiphy, struct net_device *dev,
 	struct beacon_parameters *info);
@@ -236,9 +231,8 @@ wl_cfg80211_add_virtual_iface(struct wiphy *wiphy,
 #endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
 	struct vif_params *params);
 extern s32 wl_cfg80211_del_virtual_iface(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev);
-extern s32 wl_cfg80211_change_beacon(struct wiphy *wiphy,
-				     struct net_device *dev,
-				     struct cfg80211_ap_update *params);
+extern s32 wl_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
+	struct cfg80211_beacon_data *info);
 
 extern s32 wl_get_auth_assoc_status(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	const wl_event_msg_t *e, void *data);

@@ -1,7 +1,7 @@
 /*
  * Linux OS Independent Layer
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -37,7 +37,6 @@
 #include <osl.h>
 #include <bcmutils.h>
 #include <linux/delay.h>
-#include <linux/sched/clock.h>
 #include <linux/vmalloc.h>
 #include <pcicfg.h>
 
@@ -185,7 +184,7 @@ typedef struct dhd_map_item {
 typedef struct dhd_map_record {
 	uint32 items;		/* number of total items */
 	uint32 idx;		/* current index of metadata */
-	dhd_map_item_t map[];	/* metadata storage */
+	dhd_map_item_t map[0];	/* metadata storage */
 } dhd_map_log_t;
 
 void

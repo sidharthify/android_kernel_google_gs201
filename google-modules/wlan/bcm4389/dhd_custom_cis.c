@@ -2,7 +2,7 @@
  * Process CIS information from OTP for customer platform
  * (Handle the MAC address and module information)
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -31,7 +31,6 @@
 #include <ethernet.h>
 #include <dngl_stats.h>
 #include <bcmutils.h>
-#include <bcmstdlib_s.h>
 #include <dhd.h>
 #include <dhd_dbg.h>
 #include <dhd_linux.h>

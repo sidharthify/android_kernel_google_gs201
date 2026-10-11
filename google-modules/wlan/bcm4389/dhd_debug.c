@@ -1,7 +1,7 @@
 /*
  * DHD debugability support
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -37,7 +37,6 @@
 
 #include <event_log.h>
 #include <event_trace.h>
-#include <linux/sched/clock.h>
 #include <msgtrace.h>
 #if defined(DBG_PKT_MON)
 #include <dhd_linux_priv.h>

@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD), Generic work queue framework
  * Generic interface to handle dhd deferred work events
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -54,6 +54,7 @@ enum _wq_event {
 	DHD_WQ_WORK_AXI_ERROR_DUMP,
 	DHD_WQ_WORK_CTO_RECOVERY,
 	DHD_WQ_WORK_AML_IOVAR,
+	DHD_WQ_WORK_NDEV_UPD_FEATURES,
 	DHD_MAX_WQ_EVENTS
 };
 

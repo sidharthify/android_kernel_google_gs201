@@ -3,7 +3,7 @@
  * Provides type definitions and function prototypes used to link the
  * DHD OS, bus, and protocol modules.
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -29,7 +29,6 @@
 
 #include <typedefs.h>
 #include <osl.h>
-#include <linux/sched/clock.h>
 
 #include <bcmutils.h>
 #include <bcmmsgbuf.h>
@@ -2001,7 +2000,7 @@ typedef struct dhd_pktid_log_item {
 typedef struct dhd_pktid_log {
 	uint32 items;		/* number of total items */
 	uint32 index;		/* index of pktid_log_item */
-	dhd_pktid_log_item_t map[];	/* metadata storage */
+	dhd_pktid_log_item_t map[0];	/* metadata storage */
 } dhd_pktid_log_t;
 
 typedef void * dhd_pktid_log_handle_t; /* opaque handle to pktid log */
@@ -2442,7 +2441,7 @@ typedef struct dhd_pktid_map {
 	struct bcm_mwbmap *pktid_audit; /* multi word bitmap based audit */
 #endif /* DHD_PKTID_AUDIT_ENABLED */
 	dhd_pktid_key_t	*keys; /* map_items +1 unique pkt ids */
-	dhd_pktid_item_t lockers[];	/* metadata storage */
+	dhd_pktid_item_t lockers[0];           /* metadata storage */
 } dhd_pktid_map_t;
 
 /*
@@ -6747,6 +6746,13 @@ dhd_prot_process_edl_complete(dhd_pub_t *dhd, void *evt_decode_data)
 	n = max_items_to_process;
 	while (n > 0) {
 		msg = (cmn_msg_hdr_t *)msg_addr;
+
+		/* Don't process further if any bus error has occurred */
+		if (dhd_query_bus_erros(dhd)) {
+			DHD_ERROR_RLMT(("%s: quitting due to dhd_query_bus_erros\n", __FUNCTION__));
+			return 0;
+		}
+
 		/* wait for DMA of work item to complete */
 		if ((err = dhd->prot->d2h_edl_sync_cb(dhd, ring, msg)) != BCME_OK) {
 			DHD_ERROR(("%s: Error waiting for DMA to cmpl in EDL ring; err = %d\n",
@@ -6987,6 +6993,13 @@ BCMFASTPATH(dhd_prot_process_msgbuf_rxcpl)(dhd_pub_t *dhd, int ringtype, uint32 
 
 		while (msg_len > 0) {
 			msg = (host_rxbuf_cmpl_t *)msg_addr;
+
+			/* Don't process further if any bus error has occurred */
+			if (dhd_query_bus_erros(dhd)) {
+				DHD_ERROR_RLMT(("%s: quitting due to dhd_query_bus_erros\n",
+					__FUNCTION__));
+				break;
+			}
 
 			/* Wait until DMA completes, then fetch msg_type */
 			sync = prot->d2h_sync_cb(dhd, ring, &msg->cmn_hdr, item_len);
@@ -7513,6 +7526,12 @@ BCMFASTPATH(dhd_prot_process_msgtype)(dhd_pub_t *dhd, msgbuf_ring_t *ring, uint8
 
 		msg = (cmn_msg_hdr_t *)buf;
 
+		/* Don't process further if any bus error has occurred */
+		if (dhd_query_bus_erros(dhd)) {
+			DHD_ERROR_RLMT(("%s: quitting due to dhd_query_bus_erros\n", __FUNCTION__));
+			ret = BCME_ERROR;
+			goto done;
+		}
 		/* Wait until DMA completes, then fetch msg_type */
 		msg_type = dhd->prot->d2h_sync_cb(dhd, ring, msg, item_len);
 
@@ -10415,6 +10434,7 @@ int dhd_edl_ring_hdr_write(dhd_pub_t *dhd, msgbuf_ring_t *ring, void *file, cons
 	char *buf = NULL, *ptr = NULL;
 	uint8 *msg_addr = NULL;
 	uint16	rd = 0;
+	uint size = 0;
 
 	if (ring == NULL) {
 		DHD_ERROR(("%s: Ring not initialised, failed to dump ring contents\n",
@@ -10423,7 +10443,8 @@ int dhd_edl_ring_hdr_write(dhd_pub_t *dhd, msgbuf_ring_t *ring, void *file, cons
 		goto done;
 	}
 
-	buf = MALLOCZ(dhd->osh, (D2HRING_EDL_MAX_ITEM * D2HRING_EDL_HDR_SIZE));
+	size = (D2HRING_EDL_MAX_ITEM * D2HRING_EDL_HDR_SIZE);
+	buf = MALLOCZ(dhd->osh, size);
 	if (buf == NULL) {
 		DHD_ERROR(("%s: buffer allocation failed\n", __FUNCTION__));
 		ret = BCME_ERROR;
@@ -10433,12 +10454,13 @@ int dhd_edl_ring_hdr_write(dhd_pub_t *dhd, msgbuf_ring_t *ring, void *file, cons
 
 	for (; nitems < D2HRING_EDL_MAX_ITEM; nitems++, rd++) {
 		msg_addr = (uint8 *)ring->dma_buf.va + (rd * ring->item_len);
-		ret = memcpy_s(ptr, D2HRING_EDL_HDR_SIZE, (char *)msg_addr, ring->item_len);
+		ret = memcpy_s(ptr, size, (char *)msg_addr, D2HRING_EDL_HDR_SIZE);
 		if (ret) {
 			DHD_ERROR(("D2HRING_EDL_HDR(%d) memcpy failed:%d, destsz:%d, n:%d\n",
 				rd, ret, D2HRING_EDL_HDR_SIZE, ring->item_len));
 		}
 		ptr += D2HRING_EDL_HDR_SIZE;
+		size -= D2HRING_EDL_HDR_SIZE;
 	}
 	if (file) {
 		ret = dhd_os_write_file_posn(file, file_posn, buf,

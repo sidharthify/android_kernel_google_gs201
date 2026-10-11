@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -781,6 +781,8 @@ do {									\
 #define WLAN_CIPHER_SUITE_PMK			0x00904C00
 #endif /* WLAN_CIPHER_SUITE_PMK */
 
+#define WLAN_AKM_SUITE_PSK_VER_1                0x0050F202
+
 #ifndef WLAN_AKM_SUITE_FT_8021X
 #define WLAN_AKM_SUITE_FT_8021X			0x000FAC03
 #endif /* WLAN_AKM_SUITE_FT_8021X */
@@ -802,7 +804,6 @@ do {									\
 #define WL_AKM_SUITE_SHA256_PSK 0x000FAC06
 
 #define WLAN_AKM_SUITE_SAE_SHA256		0x000FAC08
-#define WLAN_AKM_SUITE_SAE_EXT			0x000FAC24
 #define MAX_NUM_MULTI_AKM_SUITES		4u
 
 #ifndef WLAN_AKM_SUITE_FILS_SHA256
@@ -1140,7 +1141,7 @@ struct beacon_proberesp {
 	__le64 timestamp;
 	__le16 beacon_int;
 	__le16 capab_info;
-	u8 variable[];
+	u8 variable[0];
 } __attribute__ ((packed));
 
 /* driver configuration */
@@ -1814,7 +1815,7 @@ typedef enum {
 #define SAR_CONFIG_SCENARIO_COUNT	100
 typedef struct wl_sar_config_info {
 	int8 scenario;
-	int8 sar_tx_power_val;
+	uint8 sar_tx_power_val;
 	int8 airplane_mode;
 } wl_sar_config_info_t;
 #endif /* WL_SAR_TX_POWER && WL_SAR_TX_POWER_CONFIG */
@@ -1851,6 +1852,7 @@ typedef struct wlcfg_assoc_info {
 	u32 allowed_key_mgmts;  /* Keep multi akms except the best akm current trying */
 	bool auto_wpa_enabled;	/* auto_wpa enabled for multi AKM */
 	bool seamless_psk;	/* Multi-AKMs needing seamless PSK */
+	bool skip_seamless_psk;
 } wlcfg_assoc_info_t;
 
 #define MAX_NUM_OF_ASSOCIATED_DEV       64

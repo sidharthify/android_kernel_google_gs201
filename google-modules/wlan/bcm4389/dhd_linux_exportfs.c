@@ -2,7 +2,7 @@
  * Broadcom Dongle Host Driver (DHD), Linux-specific network interface
  * Basically selected code segments from usb-cdc.c and usb-rndis.c
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -37,8 +37,6 @@
 #ifdef WL_CFG80211
 #include <wl_cfg80211.h>
 #endif /* WL_CFG80211 */
-
-#include <bcmstdlib_s.h>
 
 #ifdef SHOW_LOGTRACE
 extern dhd_pub_t* g_dhd_pub;

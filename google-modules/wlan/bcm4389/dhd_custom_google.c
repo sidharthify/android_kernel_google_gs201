@@ -1,7 +1,7 @@
 /*
  * Platform Dependent file for Hikey
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,6 @@
  *
  */
 
-#include <linux/cleanup.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
@@ -50,8 +49,6 @@
 #ifdef DHD_COREDUMP
 #include <linux/platform_data/sscoredump.h>
 #endif /* DHD_COREDUMP */
-
-#include <bcmstdlib_s.h>
 
 #define EXYNOS_PCIE_VENDOR_ID 0x144d
 #if defined(CONFIG_SOC_GOOGLE)
@@ -198,7 +195,6 @@ dhd_wlan_init_mac_addr(void)
 		mac_addr = (unsigned char *)
 				of_get_property(node, WIFI_MAC, &size);
 	}
-	of_node_put(node);
 
 	/* In case Missing Provisioned MAC Address, exit with error */
 	if (!mac_addr) {
@@ -430,7 +426,7 @@ int
 dhd_wlan_init_hardware_info(void)
 {
 
-	struct device_node *node __free(device_node);
+	struct device_node *node = NULL;
 	const char *hw_sku = NULL;
 	int hw_stage = -1;
 	int hw_major = -1;
@@ -487,8 +483,6 @@ dhd_wlan_init_hardware_info(void)
 				strcpy(val_revision, "NA");
 				break;
 		}
-
-		of_node_put(node);
 	}
 
 	node = of_find_node_by_path(CDB_PATH);
@@ -523,8 +517,8 @@ dhd_wifi_init_gpio(void)
 {
 	int gpio_reg_on_val;
 	/* ========== WLAN_PWR_EN ============ */
-	const char *wlan_node = DHD_DT_COMPAT_ENTRY;
-	struct device_node *root_node __free(device_node);
+	char *wlan_node = DHD_DT_COMPAT_ENTRY;
+	struct device_node *root_node = NULL;
 
 	root_node = of_find_compatible_node(NULL, NULL, wlan_node);
 	if (!root_node) {
@@ -642,8 +636,8 @@ static int
 dhd_wlan_set_carddetect(int val)
 {
 #ifdef EXYNOS_PCIE_RC_ONOFF
-	struct device_node *root_node __free(device_node);
-	const char *wlan_node = DHD_DT_COMPAT_ENTRY;
+	struct device_node *root_node = NULL;
+	char *wlan_node = DHD_DT_COMPAT_ENTRY;
 
 	root_node = of_find_compatible_node(NULL, NULL, wlan_node);
 	if (!root_node) {
@@ -938,9 +932,10 @@ dhd_wlan_deinit(void)
 
 void dhd_plat_l1ss_ctrl(bool ctrl)
 {
+	int ret;
 #if defined(CONFIG_SOC_GOOGLE)
-	DHD_CONS_ONLY(("%s: Control L1ss RC side %d \n", __FUNCTION__, ctrl));
-	exynos_pcie_rc_l1ss_ctrl(ctrl, PCIE_L1SS_CTRL_WIFI, 1);
+	ret = exynos_pcie_rc_l1ss_ctrl(ctrl, PCIE_L1SS_CTRL_WIFI, 1);
+	DHD_CONS_ONLY(("%s: Control L1ss RC side %d ret:%d\n", __FUNCTION__, ctrl, ret));
 #endif /* CONFIG_SOC_GOOGLE */
 	return;
 }

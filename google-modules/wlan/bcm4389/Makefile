@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2024, Broadcom.
+# Copyright (C) 2025, Broadcom.
 #
 #      Unless you and Broadcom execute a separate written software license
 # agreement governing use of this software, this software is licensed to you
@@ -23,11 +23,9 @@
 # Path to the module source
 M ?= $(shell pwd)
 
-KBUILD_OPTIONS += BCMDHD_ROOT=$(src)
+KBUILD_OPTIONS += BCMDHD_ROOT=$(srctree)/$(src)
 -include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 EXTRA_CFLAGS+="-Wno-missing-prototypes"
-EXTRA_CFLAGS += -fstrict-flex-arrays=0
-
 
 all:
 	$(MAKE) -C $(KERNEL_SRC) M=$(M) \

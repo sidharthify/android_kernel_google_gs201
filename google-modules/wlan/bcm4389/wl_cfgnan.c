@@ -1,7 +1,7 @@
 /*
  * Neighbor Awareness Networking
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -33,8 +33,6 @@
 #include <wl_cfgscan.h>
 #include <wl_android.h>
 #include <wl_cfgnan.h>
-
-#include <linux/sched/clock.h>
 
 #if defined(BCMDONGLEHOST)
 #include <dngl_stats.h>
@@ -2003,7 +2001,11 @@ wl_cfgnan_set_if_addr(struct bcm_cfg80211 *cfg)
 	}
 #ifdef WL_NMI_IF
 	/* copy new nmi addr to dedicated NMI interface */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+	__dev_addr_set(cfg->nmi_ndev, if_addr.octet, ETHER_ADDR_LEN);
+#else
 	eacopy(if_addr.octet, cfg->nmi_ndev->dev_addr);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) */
 #endif /* WL_NMI_IF */
 	return ret;
 fail:
@@ -10150,7 +10152,11 @@ wl_cfgnan_register_nmi_ndev(struct bcm_cfg80211 *cfg)
 	ndev->netdev_ops = &wl_cfgnan_nmi_if_ops;
 
 	/* Register with a dummy MAC addr */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+	__dev_addr_set(ndev, temp_addr, ETHER_ADDR_LEN);
+#else
 	eacopy(temp_addr, ndev->dev_addr);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) */
 
 	ndev->ieee80211_ptr = wdev;
 	wdev->netdev = ndev;

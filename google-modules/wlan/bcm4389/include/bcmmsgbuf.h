@@ -4,7 +4,7 @@
  *
  * Definitions subject to change without notice.
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -1398,7 +1398,7 @@ typedef struct txbatch_cmn_msghdr {
 
 typedef struct txbatch_msghdr {
 	txbatch_cmn_msghdr_t txcmn;
-	txbatch_lenptr_tup_t tx_tup[];	/**< Based on packet count */
+	txbatch_lenptr_tup_t tx_tup[0]; /**< Based on packet count */
 } txbatch_msghdr_t;
 
 /* TX desc posting header */
@@ -1421,7 +1421,7 @@ typedef struct txdescr_msghdr {
 	txdescr_cmn_msghdr_t txcmn;
 	uint8 txhdr[ETHER_HDR_LEN];
 	uint16 rsvd;
-	tx_lenptr_tup_t tx_tup[];	/**< Based on descriptor count */
+	tx_lenptr_tup_t tx_tup[0];	/**< Based on descriptor count */
 } txdescr_msghdr_t;
 
 /** Tx status header info */
@@ -1444,7 +1444,7 @@ typedef struct rxdesc_msghdr {
 	uint16 rsvd0;
 	uint8 rsvd1;
 	uint8 descnt;
-	rx_lenptr_tup_t rx_tup[];
+	rx_lenptr_tup_t rx_tup[0];
 } rxdesc_msghdr_t;
 
 /** RX complete tuples */
@@ -1461,7 +1461,7 @@ typedef struct rxcmplt_hdr {
 	cmn_msg_hdr_t   msg;
 	uint16 rsvd0;
 	uint16 rxcmpltcnt;
-	rxcmplt_tup_t rx_tup[];
+	rxcmplt_tup_t rx_tup[0];
 } rxcmplt_hdr_t;
 
 typedef struct hostevent_hdr {

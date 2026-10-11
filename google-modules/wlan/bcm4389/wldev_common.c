@@ -1,7 +1,7 @@
 /*
  * Common function shared by Linux WEXT, cfg80211 and p2p drivers
  *
- * Copyright (C) 2024, Broadcom.
+ * Copyright (C) 2025, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -29,7 +29,6 @@
 
 #include <wldev_common.h>
 #include <bcmutils.h>
-#include <bcmstdlib_s.h>
 #ifdef WL_CFG80211
 #include <wl_cfg80211.h>
 #include <wl_cfgscan.h>
