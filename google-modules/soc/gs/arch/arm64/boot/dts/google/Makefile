@@ -48,7 +48,7 @@ gs201_pantah_overlays := \
 
 gs101_raviole_dtbs := gs101-a0.dtb gs101-b0.dtb
 
-gs201_pantah_dtbs := gs201-a0.dtb gs201-b0.dtb
+gs201_pantah_dtbs := gs201-a0.dtb gs201-b0.dtb gs201-b0_v2-ipop.dtb
 
 # Usage:
 #   $(call DTBS_overlay_template, overlay, base_dtb, suffix)
