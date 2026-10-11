@@ -604,8 +604,18 @@ static inline void aoc_usb_exit(void)
 {
 }
 #endif
+#ifdef AOC_ALSA_DP_AUDIO
 int aoc_dp_init(void);
 void aoc_dp_exit(void);
+#else
+static inline int aoc_dp_init(void)
+{
+	return 0;
+}
+static inline void aoc_dp_exit(void)
+{
+}
+#endif
 int aoc_audio_mic_mask_set(struct aoc_chip *chip, bool is_voice);
 
 int aoc_audio_us_record(struct aoc_chip *chip, bool enable);
