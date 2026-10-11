@@ -20,6 +20,10 @@
 #include <linux/scatterlist.h>
 #include <linux/dma-mapping.h>
 
+#if CONFIG_ARM64
+#include <asm/daifflags.h>
+#endif
+
 #include "trusty-irq.h"
 #include "trusty-smc.h"
 #include "trusty-trace.h"
@@ -133,6 +137,32 @@ static unsigned long trusty_std_call_inner(struct device *dev,
 	return ret;
 }
 
+#if CONFIG_ARM64
+
+static void trusty_local_irq_disable_before_smc(void)
+{
+	local_daif_mask();
+}
+
+static void trusty_local_irq_enable_after_smc(void)
+{
+	local_daif_restore(DAIF_PROCCTX);
+}
+
+#else
+
+static void trusty_local_irq_disable_before_smc(void)
+{
+	local_irq_disable();
+}
+
+static void trusty_local_irq_enable_after_smc(void)
+{
+	local_irq_enable();
+}
+
+#endif
+
 static unsigned long trusty_std_call_helper(struct device *dev,
 					    unsigned long smcnr,
 					    unsigned long a0, unsigned long a1,
@@ -143,7 +173,7 @@ static unsigned long trusty_std_call_helper(struct device *dev,
 	struct trusty_state *s = platform_get_drvdata(to_platform_device(dev));
 
 	while (true) {
-		local_irq_disable();
+		trusty_local_irq_disable_before_smc();
 
 		/* tell Trusty scheduler what the current priority is */
 		WARN_ON_ONCE(current->policy != SCHED_NORMAL);
@@ -171,7 +201,7 @@ static unsigned long trusty_std_call_helper(struct device *dev,
 			 */
 			trusty_enqueue_nop(dev, NULL);
 		}
-		local_irq_enable();
+		trusty_local_irq_enable_after_smc();
 
 		if ((int)ret != SM_ERR_BUSY)
 			break;
@@ -1019,7 +1049,6 @@ static int trusty_cpu_up(unsigned int cpu, struct hlist_node *node)
 
 	s = container_of(node, struct trusty_state, cpuhp_node);
 	tw = this_cpu_ptr(s->nop_works);
-	set_cpus_allowed_ptr(tw->nop_thread, cpumask_of(cpu));
 	kthread_unpark(tw->nop_thread);
 
 	dev_dbg(s->dev, "cpu %d up\n", cpu);
@@ -1115,6 +1144,7 @@ static int trusty_probe(struct platform_device *pdev)
 					__func__, cpu, tw->nop_thread);
 			goto err_thread_create;
 		}
+		kthread_set_per_cpu(tw->nop_thread, cpu);
 		kthread_park(tw->nop_thread);
 	}
 
@@ -1172,7 +1202,7 @@ err_allocate_state:
 	return ret;
 }
 
-static void trusty_remove(struct platform_device *pdev)
+static int trusty_remove(struct platform_device *pdev)
 {
 	unsigned int cpu;
 	struct trusty_state *s = platform_get_drvdata(pdev);
@@ -1198,6 +1228,7 @@ static void trusty_remove(struct platform_device *pdev)
 	s->dev->dma_parms = NULL;
 	kfree(s->version_str);
 	kfree(s);
+	return 0;
 }
 
 static const struct of_device_id trusty_of_match[] = {

@@ -409,20 +409,20 @@ err_share_memory:
 
 static int trusty_virtio_find_vqs(struct virtio_device *vdev, unsigned int nvqs,
 				  struct virtqueue *vqs[],
-				  struct virtqueue_info vqs_info[],
+				  vq_callback_t *callbacks[],
+				  const char * const names[],
+				  const bool *ctxs,
 				  struct irq_affinity *desc)
 {
-	struct virtqueue_info *vqi;
 	unsigned int i;
 	int ret;
 	bool ctx = false;
 
 	for (i = 0; i < nvqs; i++) {
-		vqi = &vqs_info[i];
 		ctx = false;
-		if (vqi->ctx)
-			ctx = vqi->ctx;
-		vqs[i] = _find_vq(vdev, i, vqi->callback, vqi->name, ctx);
+		if (ctxs)
+			ctx = ctxs[i];
+		vqs[i] = _find_vq(vdev, i, callbacks[i], names[i], ctx);
 		if (IS_ERR(vqs[i])) {
 			ret = PTR_ERR(vqs[i]);
 			_del_vqs(vdev);
@@ -715,18 +715,8 @@ static dma_addr_t trusty_virtio_dma_map_page(struct device *dev,
 	return buf->buf_id;
 }
 
-static void trusty_virtio_dma_unmap_page(struct device *dev,
-					 dma_addr_t dma_handle,
-					 size_t size,
-					 enum dma_data_direction dir,
-					 unsigned long attrs)
-{
-	return;
-}
-
 static const struct dma_map_ops trusty_virtio_dma_map_ops = {
 	.map_page = trusty_virtio_dma_map_page,
-	.unmap_page = trusty_virtio_dma_unmap_page,
 };
 
 static int trusty_virtio_probe(struct platform_device *pdev)
@@ -782,7 +772,7 @@ err_create_check_wq:
 	return ret;
 }
 
-static void trusty_virtio_remove(struct platform_device *pdev)
+static int trusty_virtio_remove(struct platform_device *pdev)
 {
 	struct trusty_ctx *tctx = platform_get_drvdata(pdev);
 	int ret;
@@ -819,6 +809,7 @@ static void trusty_virtio_remove(struct platform_device *pdev)
 
 	/* free context */
 	kfree(tctx);
+	return 0;
 }
 
 static const struct of_device_id trusty_of_match[] = {

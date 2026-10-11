@@ -704,9 +704,8 @@ static int tipc_shared_handle_drop(struct tipc_shared_handle *shared_handle)
 	}
 
 	if (shared_handle->sgt)
-		dma_buf_unmap_attachment_unlocked(shared_handle->attach,
-						  shared_handle->sgt,
-						  DMA_BIDIRECTIONAL);
+		dma_buf_unmap_attachment(shared_handle->attach,
+					 shared_handle->sgt, DMA_BIDIRECTIONAL);
 	if (shared_handle->attach)
 		dma_buf_detach(shared_handle->dma_buf, shared_handle->attach);
 	if (shared_handle->dma_buf)
@@ -1255,8 +1254,8 @@ static int dn_share_fd(struct tipc_dn_chan *dn, int fd,
 		goto cleanup_handle;
 	}
 
-	shared_handle->sgt = dma_buf_map_attachment_unlocked(
-				shared_handle->attach, DMA_BIDIRECTIONAL);
+	shared_handle->sgt = dma_buf_map_attachment(shared_handle->attach,
+						    DMA_BIDIRECTIONAL);
 	if (IS_ERR(shared_handle->sgt)) {
 		ret = PTR_ERR(shared_handle->sgt);
 		shared_handle->sgt = NULL;
@@ -2142,18 +2141,8 @@ static int tipc_virtio_probe(struct virtio_device *vdev)
 	struct tipc_virtio_dev *vds;
 	struct tipc_dev_config config;
 	struct virtqueue *vqs[2];
-	struct virtqueue_info vqs_info[] = {
-		{
-			.name = "rx",
-			.callback = _rxvq_cb,
-			.ctx = false,
-		},
-		{
-			.name = "tx",
-			.callback = _txvq_cb,
-			.ctx = false,
-		},
-	};
+	vq_callback_t *vq_cbs[] = {_rxvq_cb, _txvq_cb};
+	static const char * const vq_names[] = { "rx", "tx" };
 
 	vds = kzalloc(sizeof(*vds), GFP_KERNEL);
 	if (!vds)
@@ -2184,7 +2173,8 @@ static int tipc_virtio_probe(struct virtio_device *vdev)
 	vds->cdev_name[sizeof(vds->cdev_name)-1] = '\0';
 
 	/* find tx virtqueues (rx and tx and in this order) */
-	err = vdev->config->find_vqs(vdev, 2, vqs, vqs_info, NULL);
+	err = vdev->config->find_vqs(vdev, 2, vqs, vq_cbs, vq_names, NULL,
+				     NULL);
 	if (err)
 		goto err_find_vqs;
 
@@ -2282,7 +2272,7 @@ static int __init tipc_init(void)
 	}
 
 	tipc_major = MAJOR(dev);
-	tipc_class = class_create(KBUILD_MODNAME);
+	tipc_class = class_create(THIS_MODULE, KBUILD_MODNAME);
 	if (IS_ERR(tipc_class)) {
 		ret = PTR_ERR(tipc_class);
 		pr_err("%s: class_create failed: %d\n", __func__, ret);
