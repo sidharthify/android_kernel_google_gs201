@@ -148,10 +148,12 @@
 
 #define CORE_PMIC_MAIN 0
 #define CORE_PMIC_SUB 1
+#define CORE_PMIC_MAIN_RTC 2
 
 #define CPU0_CLUSTER_MIN 0
 #define CPU1_CLUSTER_MIN 4
 #define CPU2_CLUSTER_MIN 8
+#define METER_CHANNEL_MAX 12
 
 /* Event Counter */
 #define EVT_CNT_ENABLE_DEFAULT  1
