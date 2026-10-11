@@ -30,6 +30,30 @@
 					30   0   0
 				>;
 
+				google,aact-cv-limits = <4200000 4300000 4450000>;
+				google,aact-temp-limits = <0 100 200 420 460 480 550>;
+				google,chg-aact-ecc = <0 300 1000>;
+				google,aact-cc-limits = <
+					30  10   0
+					50  30  30
+					100  70  50
+					80  50  50
+					50  50   0
+					30   0   0
+					30  10   0
+					50  30  30
+					95  70  50
+					80  50  50
+					50  50   0
+					30   0   0
+					30  10   0
+					50  30  30
+					90  70  50
+					80  50  50
+					50  50   0
+					30   0   0
+				>;
+
 				google,ttf-temp-idx= <2>;
 				google,ttf-adapter = <1800>;
 				google,ttf-soc-table =  <49 59 72 78 93 95  98 100>;
@@ -67,6 +91,12 @@
 				#cooling-cells = <2>;
 				google,dc-irdrop;
 				google,fv-dc-ratio = <35>;
+
+				google,bhi-status-marginal = <79>;
+				google,bhi-status-need-rep = <79>;
+				google,bhi-cycle-grace = <200>;
+
+				google,first-usage-date = <0>;
 			};
 
 			google_bms {
@@ -132,7 +162,7 @@
 	clock-frequency = <400000>;
 
 	/* also as max77759 pmic  */
-	max77729_pmic:max77729pmic@0x66 {
+	max77729_pmic:max77729pmic@66 {
 		status = "okay";
 		compatible = "maxim,max77729pmic";
 		reg = <0x66>;
@@ -156,7 +186,7 @@
 		};
 	};
 
-	max77759_fg:max77759fg@0x36 {
+	max77759_fg:max77759fg@36 {
 		status = "okay";
 		compatible = "maxim,max77759";
 		reg = <0x36>;
@@ -177,7 +207,7 @@
 		};
 	};
 
-	max77759_chg:max77759chrg@0x69 {
+	max77759_chg:max77759chrg@69 {
 		status = "okay";
 		compatible = "maxim,max77759chrg";
 		reg = <0x69>;
@@ -191,6 +221,14 @@
 		max77759,chg-term-voltage = <4400>;
 
 		#thermal-sensor-cells = <1>;
+
+		max77759,wcin-inlim-headroom = <40000>;
+
+		max77759_gpio: max77759_gpio {
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <1>;
+		};
 	};
 
 };
