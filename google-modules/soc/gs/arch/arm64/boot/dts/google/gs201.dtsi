@@ -47,8 +47,8 @@
 	#size-cells = <1>;
 
 	aliases {
-		i2c0 = &acpm_mfd_bus0;
-		i2c1 = &acpm_mfd_bus1;
+		i2c20 = &acpm_mfd_bus0;
+		i2c21 = &acpm_mfd_bus1;
 		pinctrl0 = &pinctrl_0;
 		pinctrl1 = &pinctrl_1;
 		pinctrl2 = &pinctrl_2;
@@ -521,7 +521,7 @@
 		acpm-ipc-channel = <0>;
 	};
 
-	clock: clock-controller@0x1e080000 {
+	clock: clock-controller@1e080000 {
 		compatible = "samsung,gs201-clock";
 		reg = <0x0 0x1e080000 0x8000>;
 		#clock-cells = <1>;
@@ -1553,10 +1553,5 @@
 		compatible = "samsung,exynos-seclog";
 		interrupts = <GIC_SPI INTREQ__SECURE_LOG IRQ_TYPE_LEVEL_HIGH>;
 		memory-region = <&seclog_mem>;
-	};
-	pps {
-		compatible = "pps-gpio";
-		gpios = <&gpp15 1 GPIO_ACTIVE_HIGH>;
-		assert-falling-edge = <0>;
 	};
 };
