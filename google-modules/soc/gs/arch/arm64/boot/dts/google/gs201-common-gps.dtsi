@@ -21,7 +21,7 @@
 	swap-mode = <1> ;
 
 	bcm4775@0 {
-		compatible = "ssp,bcm4775";
+		compatible = "ssp-spi,bcm4775";
 		reg = <0>;
 		spi-max-frequency = <26000000>;
 		spi-cpol;
@@ -77,5 +77,20 @@
 		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
 		samsung,pin-con-pdn = <EXYNOS_PIN_PDN_PREV>;
 		samsung,pin-pud-pdn = <EXYNOS_PIN_PULL_NONE>;
+	};
+};
+
+/ {
+	fragment@bbd_pps {
+		target-path = "/";
+		__overlay__ {
+			bbd_pps {
+				compatible = "bbd-pps-gpio";
+				status = "okay";
+				gpios = <&gpp15 1 GPIO_ACTIVE_HIGH>;
+				pinctrl-names = "default";
+				assert-falling-edge = <0>;
+			};
+		};
 	};
 };
