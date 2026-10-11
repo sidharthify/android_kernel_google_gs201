@@ -89,6 +89,7 @@ struct gsa_mbox {
 	u32 exp_intmr0;
 	u32 wake_ref_cnt;
 	struct device *s2mpu;
+	void __iomem *s2mpu_base; /* only used without pKVM */
 };
 
 static void gsa_mbox_mask_irq0(struct gsa_mbox *mb, u32 mask)
@@ -189,8 +190,29 @@ static int gsa_link_s2mpu(struct device *dev, struct gsa_mbox *mb)
 	return devm_add_action_or_reset(dev, gsa_unlink_s2mpu, mb);
 }
 #else /* CONFIG_GSA_PKVM */
+/*
+ * Without pKVM nothing else configures the GSA S2MPU, so map it here and
+ * open it ourselves around data transfers (see gsa_data_xfer_prepare_locked).
+ */
 static int gsa_link_s2mpu(struct device *dev, struct gsa_mbox *mb)
 {
+	struct device_node *np;
+	void __iomem *base;
+
+	np = of_parse_phandle(dev->of_node, "s2mpu", 0);
+	if (!np) {
+		dev_warn(dev, "no 's2mpu' entry found\n");
+		return 0;
+	}
+
+	base = devm_of_iomap(dev, np, 0, NULL);
+	of_node_put(np);
+	if (IS_ERR(base)) {
+		dev_err(dev, "failed to map s2mpu (%ld)\n", PTR_ERR(base));
+		return PTR_ERR(base);
+	}
+
+	mb->s2mpu_base = base;
 	return 0;
 }
 #endif /* CONFIG_GSA_PKVM */
@@ -550,12 +572,67 @@ err_wakelock_release:
 
 #else /* CONFIG_GSA_PKVM */
 
+#define MAX_GSA_WAKELOCK_CNT 100
+
+/* S2MPU control register; clearing ENABLE lets all traffic through */
+#define S2MPU_REG_NS_CTRL0 0x0
+
+/*
+ * The GSA S2MPU lives in the GSACORE power domain and resets to blocking all
+ * DMA. Under pKVM the hypervisor opens it when gsa_data_xfer_prepare_locked()
+ * resumes it. Without pKVM, hold a GSA wakelock so GSACORE stays powered for
+ * the transfer and switch the S2MPU to pass-through ourselves.
+ */
 static int gsa_data_xfer_prepare_locked(struct gsa_mbox *mb)
 {
+	int ret;
+
+	if (WARN_ON(mb->wake_ref_cnt >= MAX_GSA_WAKELOCK_CNT))
+		return -EINVAL;
+
+	if (mb->wake_ref_cnt) {
+		/* just bump wake ref count */
+		++mb->wake_ref_cnt;
+		return 0;
+	}
+
+	ret = gsa_send_mbox_cmd_locked(mb, GSA_MB_CMD_WAKELOCK_ACQUIRE,
+				       NULL, 0, NULL, 0);
+	if (ret < 0) {
+		dev_err(mb->dev, "gsa wakelock acquire failed (%d)\n", ret);
+		return ret;
+	}
+	++mb->wake_ref_cnt;
+
+	/* GSACORE may have been powered down, so open the S2MPU every time */
+	if (mb->s2mpu_base)
+		writel(0, mb->s2mpu_base + S2MPU_REG_NS_CTRL0);
+
 	return 0;
 }
 
-static void gsa_data_xfer_finish_locked(struct gsa_mbox *mb) {}
+static void gsa_data_xfer_finish_locked(struct gsa_mbox *mb)
+{
+	int rc;
+
+	if (WARN_ON(!mb->wake_ref_cnt))
+		return;
+
+	if (mb->wake_ref_cnt > 1) {
+		/* Just decrement wake ref count */
+		--mb->wake_ref_cnt;
+		return;
+	}
+
+	rc = gsa_send_mbox_cmd_locked(mb, GSA_MB_CMD_WAKELOCK_RELEASE,
+				      NULL, 0, NULL, 0);
+	if (WARN_ON(rc < 0)) {
+		dev_err(mb->dev, "gsa wakelock release failed (%d)\n", rc);
+		return;
+	}
+
+	--mb->wake_ref_cnt;
+}
 
 #endif /* CONFIG_GSA_PKVM */
 
