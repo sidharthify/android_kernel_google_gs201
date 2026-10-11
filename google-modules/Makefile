@@ -37,6 +37,6 @@ obj-y += touch/common/
 obj-y += touch/focaltech/ft3658/
 obj-y += touch/synaptics/syna_c10/
 obj-y += trusty/
-obj-y += uwb/kernel/
+obj-y += uwb/qorvo/dw3000/kernel/
 obj-y += video/gchips/
 obj-y += wlan/bcm4389/
