@@ -118,6 +118,7 @@
 	status = "okay";
 	clock-frequency = <1000000>;
 	samsung,reset-before-trans;
+	samsung,hybrid-polling-mode;
 
 	pinctrl-names = "default","on_i2c","off_i2c";
 	pinctrl-0 = <&hsi2c1_bus_in>;
@@ -528,6 +529,9 @@
 					 1000
 					 0
 					 0>;
+
+				/* Thread priority */
+				transaction-thread-priority = <99>;
 
 				i2c-lock-group-id = <3>;
 				transaction-process-limit = <20>;
