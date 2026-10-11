@@ -14,6 +14,16 @@
 #include <dt-bindings/power/exynos-power.h>
 
 / {
+	/* NOTICE: The order matters!
+	 * If one domain depends on another domain, make sure the dependency is
+	 * before the dependent. For example, put pd-g3d before pd-embedded_g3d.
+	 * This to prevent deferred probing from happening. The reason is that
+	 * pkvm-s2mpu devices are only probed during module init. If the modules
+	 * that pkvm-s2mpu depends on are not ready at that time, then those
+	 * modules will be skipped and never probed again. To prevent that from
+	 * happening, make sure all the domains will not be deferred as well.
+	 */
+
 	pd_aoc: pd-aoc@18061880 {
 		compatible = "samsung,exynos-pd";
 		reg = <0x0 0x18061880 0x20>;
@@ -35,16 +45,6 @@
 		#power-domain-cells = <0>;
 	};
 
-	pd_embedded_g3d: pd-embedded_g3d@18062000 {
-		compatible = "samsung,exynos-pd";
-		reg = <0x0 0x18062000 0x20>;
-		cal_id = <0xB1380006>;
-		status = "okay";
-		skip-idle-ip;
-		power-domains = <&pd_g3d>;
-		#power-domain-cells = <0>;
-	};
-
 	pd_g3d: pd-g3d@18061E00 {
 		compatible = "samsung,exynos-pd";
 		reg = <0x0 0x18061E00 0x20>;
@@ -53,6 +53,16 @@
 		cmu_id = <0x27F00000>;
 		status = "okay";
 		skip-idle-ip;
+		#power-domain-cells = <0>;
+	};
+
+	pd_embedded_g3d: pd-embedded_g3d@18062000 {
+		compatible = "samsung,exynos-pd";
+		reg = <0x0 0x18062000 0x20>;
+		cal_id = <0xB1380006>;
+		status = "okay";
+		skip-idle-ip;
+		power-domains = <&pd_g3d>;
 		#power-domain-cells = <0>;
 	};
 
@@ -78,6 +88,17 @@
 		#power-domain-cells = <0>;
 	};
 
+	pd_disp: pd-disp@18062280 {
+		compatible = "samsung,exynos-pd";
+		reg = <0x0 0x18062280 0x20>;
+		cal_id = <0xB138000B>;
+		need_smc = <0x1C210204>;
+		cmu_id = <0x1C200000>;
+		status = "okay";
+		#power-domain-cells = <0>;
+		skip-idle-ip;
+	};
+
 	pd_dpu: pd-dpu@18062200 {
 		compatible = "samsung,exynos-pd";
 		reg = <0x0 0x18062200 0x20>;
@@ -86,17 +107,6 @@
 		cmu_id = <0x1C000000>;
 		status = "okay";
 		power-domains = <&pd_disp>;
-		#power-domain-cells = <0>;
-		skip-idle-ip;
-	};
-
-	pd_disp: pd-disp@18062280 {
-		compatible = "samsung,exynos-pd";
-		reg = <0x0 0x18062280 0x20>;
-		cal_id = <0xB138000B>;
-		need_smc = <0x1C210204>;
-		cmu_id = <0x1C200000>;
-		status = "okay";
 		#power-domain-cells = <0>;
 		skip-idle-ip;
 	};
@@ -141,17 +151,6 @@
 		#power-domain-cells = <0>;
 	};
 
-	pd_dns: pd-dns@18062500 {
-		compatible = "samsung,exynos-pd";
-		reg = <0x0 0x18062500 0x20>;
-		cal_id = <0xB1380010>;
-		need_smc = <0x1B010204>;
-		cmu_id = <0x1B000000>;
-		status = "okay";
-		power-domains = <&pd_itp>;
-		#power-domain-cells = <0>;
-	};
-
 	pd_g3aa: pd-g3aa@18062580 {
 		compatible = "samsung,exynos-pd";
 		reg = <0x0 0x18062580 0x20>;
@@ -180,6 +179,17 @@
 		need_smc = <0x1B410204>;
 		cmu_id = <0x1B400000>;
 		status = "okay";
+		#power-domain-cells = <0>;
+	};
+
+	pd_dns: pd-dns@18062500 {
+		compatible = "samsung,exynos-pd";
+		reg = <0x0 0x18062500 0x20>;
+		cal_id = <0xB1380010>;
+		need_smc = <0x1B010204>;
+		cmu_id = <0x1B000000>;
+		status = "okay";
+		power-domains = <&pd_itp>;
 		#power-domain-cells = <0>;
 	};
 
