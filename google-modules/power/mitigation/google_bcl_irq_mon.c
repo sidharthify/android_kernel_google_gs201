@@ -10,7 +10,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <trace/events/power.h>
-#include <soc/google/modem_notifier.h>
+#include <linux/modem_notifier.h>
 #include "bcl.h"
 
 #if IS_ENABLED(CONFIG_SOC_ZUMA)

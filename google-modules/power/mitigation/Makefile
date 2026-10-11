@@ -2,7 +2,7 @@
 
 subdir-ccflags-y += \
 		-I$(KERNEL_SRC)/../private/google-modules/bms \
-		-I$(KERNEL_SRC)/drivers/thermal
+		-I$(srctree)/drivers/thermal
 
 obj-$(CONFIG_GOOGLE_BCL) += google_bcl.o
 google_bcl-y			+= google_bcl_core.o
