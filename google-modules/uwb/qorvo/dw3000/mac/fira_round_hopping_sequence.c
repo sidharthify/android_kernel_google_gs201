@@ -23,7 +23,7 @@
 
 #include "fira_session.h"
 #include <linux/string.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 int fira_round_hopping_sequence_init(struct fira_session *session)
 {

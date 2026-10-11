@@ -29,7 +29,6 @@
 #include <linux/interrupt.h>
 #include <linux/bitfield.h>
 #include <linux/log2.h>
-#include <linux/unaligned.h>
 
 #include "dw3000.h"
 #include "dw3000_core.h"

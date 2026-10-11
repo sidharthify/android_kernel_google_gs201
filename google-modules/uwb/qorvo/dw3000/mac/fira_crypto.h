@@ -28,6 +28,7 @@
 #include <linux/kernel.h>
 
 #include <linux/errno.h>
+#include <asm/unaligned.h>
 #include <linux/string.h>
 #include <linux/ieee802154.h>
 #include <linux/printk.h>

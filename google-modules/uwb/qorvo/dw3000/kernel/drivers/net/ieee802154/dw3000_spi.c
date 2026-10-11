@@ -116,14 +116,14 @@ static int dw3000_spi_probe(struct spi_device *spi)
 	hrtimer_init(&dw->idle_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	dw->idle_timer.function = dw3000_idle_timeout;
 
-	dev_info(dw->dev, "Loading driver uwbm-5.1.0-rc1...");
+	dev_info(dw->dev, "Loading driver uwbm-5.2.0-rc1...");
 	dw3000_sysfs_init(dw);
 
 	/* Setup SPI parameters */
 	dev_info(dw->dev, "setup mode: %d, %u bits/w, %u Hz max\n",
 		 (int)(spi->mode & (SPI_CPOL | SPI_CPHA)), spi->bits_per_word,
 		 spi->max_speed_hz);
-	dev_info(dw->dev, "can_dma: %d\n", spi->controller->can_dma != NULL);
+	dev_info(dw->dev, "can_dma: %d\n", spi->master->can_dma != NULL);
 	spi->bits_per_word = 8;
 #if (KERNEL_VERSION(5, 3, 0) <= LINUX_VERSION_CODE)
 	spi->rt = 1;

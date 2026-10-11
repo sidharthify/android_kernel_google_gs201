@@ -46,6 +46,7 @@ static int dw3000_min_clamp_value = 0;
 module_param_named(min_clamp_value, dw3000_min_clamp_value, int, 0644);
 MODULE_PARM_DESC(min_clamp_value, "Sets the minimum cpu frequency the dw3000 thread must run at");
 
+
 static void dw3000_get_clamp_from_dt(struct dw3000 *dw) {
 	int dt_clamp = DW3000_MIN_CLAMP_VALUE;
 	int ret;
