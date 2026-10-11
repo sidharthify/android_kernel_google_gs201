@@ -14,7 +14,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/cleanup.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/version.h>
@@ -1405,12 +1404,11 @@ static inline void rt9471_irq_unmask(struct rt9471_chip *chip, int irqnum)
 static int rt9471_parse_dt(struct rt9471_chip *chip)
 {
 	int ret, len, irqcnt = 0, irqnum;
-	struct device_node *parent_np = chip->dev->of_node;
-	struct device_node *np __free(device_node) = NULL;
+	struct device_node *parent_np = chip->dev->of_node, *np = NULL;
 	struct rt9471_desc *desc = NULL;
 	const char *name = NULL;
 	char *ceb_name = NULL;
-	unsigned long init_flags = GPIOF_OUT_INIT_LOW;
+	unsigned long init_flags = GPIOF_DIR_OUT;
 
 	dev_info(chip->dev, "%s\n", __func__);
 
@@ -1754,7 +1752,7 @@ static void rt9471_init_work_handler(struct work_struct *work)
 #if IS_ENABLED(CONFIG_GPIOLIB)
 static int rt9471_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
 {
-	return GPIO_LINE_DIRECTION_OUT;
+	return GPIOF_DIR_OUT;
 }
 
 static int rt9471_gpio_get(struct gpio_chip *chip, unsigned int offset)
@@ -2020,7 +2018,8 @@ static int rt9471_register_psy(struct rt9471_chip *chip)
 	return 0;
 }
 
-static int rt9471_probe(struct i2c_client *client)
+static int rt9471_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int ret = 0;
 	struct rt9471_chip *chip = NULL;
@@ -2095,18 +2094,13 @@ static int rt9471_probe(struct i2c_client *client)
 
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	if (chip->dev_id == RT9470_DEVID) {
-		struct device_node *dn;
-
 		rt9471_gpio_init(chip);
 		chip->gpio.parent = chip->dev;
-		/* balance of_node_put() in of_find_node_by_name() */
-		of_node_get(client->dev.of_node);
-		dn = of_find_node_by_name(client->dev.of_node,
-					  chip->gpio.label);
-		if (!dn)
+		chip->gpio.of_node = of_find_node_by_name(client->dev.of_node,
+							  chip->gpio.label);
+		if (!chip->gpio.of_node)
 			dev_warn(chip->dev, "Failed to find %s DT node\n",
-				 chip->gpio.label);
-		chip->gpio.fwnode = of_node_to_fwnode(dn);
+				chip->gpio.label);
 
 		ret = devm_gpiochip_add_data(chip->dev, &chip->gpio, chip);
 		dev_info(chip->dev, "%d GPIOs registered ret:%d\n",

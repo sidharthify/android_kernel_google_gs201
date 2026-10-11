@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * Copyright (C) 2020,2023 Google Inc
+ * Copyright (C) 2020, Google Inc
  *
  * MAX20339 OVP and LS driver
  */
@@ -8,13 +8,13 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": %s " fmt, __func__
 
 #include <linux/gpio.h>
-#include <linux/gpio/consumer.h>
 #include <linux/gpio/driver.h>
 #include <linux/i2c.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of_device.h>
+#include <linux/of_gpio.h>
 #include <linux/of_irq.h>
 #include <linux/interrupt.h>
 #include <linux/regmap.h>
@@ -80,6 +80,7 @@ struct max20339_ovp {
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	struct gpio_chip gpio;
 #endif
+	int irq_gpio;
 };
 
 static const struct regmap_range max20339_ovp_range[] = {
@@ -181,7 +182,7 @@ static int max20339_init_regs(struct regmap *regmap, struct device *dev)
 static int max20339_gpio_get_direction(struct gpio_chip *chip,
 				       unsigned int offset)
 {
-	return GPIO_LINE_DIRECTION_OUT;
+	return GPIOF_DIR_OUT;
 }
 
 static bool max20339_is_lsw_closed(struct max20339_ovp *ovp, int offset)
@@ -363,15 +364,13 @@ static void max20339_gpio_set(struct gpio_chip *chip,
 static int max20339_setup_irq(struct max20339_ovp *ovp)
 {
 	struct device *dev = &ovp->client->dev;
-	struct gpio_desc *irq_gpio;
-	int ret;
+	int ret = -EINVAL;
 
-	irq_gpio = devm_gpiod_get(dev, "max20339,irq", GPIOD_ASIS);
-	if (IS_ERR(irq_gpio)) {
-		ret = PTR_ERR(irq_gpio);
-		dev_err(dev, "failed to get irq-gpio: %d\n", ret);
+	ovp->irq_gpio = of_get_named_gpio(dev->of_node, "max20339,irq-gpio", 0);
+	if (ovp->irq_gpio < 0) {
+		dev_err(dev, "failed to get irq-gpio (%d)\n", ovp->irq_gpio);
 	} else {
-		const int irq = gpiod_to_irq(irq_gpio);
+		const int irq = gpio_to_irq(ovp->irq_gpio);
 
 		ret = devm_request_threaded_irq(dev, irq, NULL,
 						max20339_irq,
@@ -381,8 +380,8 @@ static int max20339_setup_irq(struct max20339_ovp *ovp)
 						"max2339_ovp",
 						ovp);
 
-		dev_err(dev, "irq_gpio=%d found irq=%d registered %d\n",
-			desc_to_gpio(irq_gpio), irq, ret);
+		dev_err(dev, "ovp->irq_gpio=%d found irq=%d registered %d\n",
+			ovp->irq_gpio, irq, ret);
 	}
 
 	/* Read to clear interrupts */
@@ -391,11 +390,11 @@ static int max20339_setup_irq(struct max20339_ovp *ovp)
 	return ret;
 }
 
-static int max20339_probe(struct i2c_client *client)
+static int max20339_probe(struct i2c_client *client,
+			  const struct i2c_device_id *i2c_id)
 {
 	struct max20339_ovp *ovp;
 	int rc, ret = 0;
-	struct device_node *dp;
 
 	ovp = devm_kzalloc(&client->dev, sizeof(*ovp), GFP_KERNEL);
 	if (!ovp)
@@ -423,13 +422,11 @@ static int max20339_probe(struct i2c_client *client)
 	ovp->gpio.base = -1;
 	ovp->gpio.ngpio = MAX20339_NUM_GPIOS;
 	ovp->gpio.can_sleep = true;
-	/* balance of_node_put() in of_find_node_by_name() */
-	of_node_get(client->dev.of_node);
-	dp = of_find_node_by_name(client->dev.of_node, ovp->gpio.label);
-	if (!dp)
+	ovp->gpio.of_node = of_find_node_by_name(client->dev.of_node,
+						 ovp->gpio.label);
+	if (!ovp->gpio.of_node)
 		dev_err(&client->dev, "Failed to find %s DT node\n",
 			ovp->gpio.label);
-	ovp->gpio.fwnode = of_node_to_fwnode(dp);
 
 	ret = devm_gpiochip_add_data(&client->dev, &ovp->gpio, ovp);
 	if (ret)

@@ -42,17 +42,18 @@
 
 /* TODO: link to the structure used to save this*/
 #define BATT_ONE_HIST_LEN	12
-/* TODO: this depends on the EEPROM size */
-#define BATT_MAX_HIST_CNT	75
-
 #define GBMS_CCBIN_BUCKET_COUNT	10
 
 /* Adds BPST and STRD */
 #define GBMS_LOTR_DEFAULT 0xff
 #define GBMS_LOTR_V1 1
+#define GBMS_LOTR_V2 2
 
 /* Date of manufacturing and first use */
 #define BATT_EEPROM_TAG_XYMD_LEN 3
+
+/* Allowing update FCR per every N cycles */
+#define GBMS_FCRU_LEN	2
 
 /*
  * Tags are u32 constants: hardcoding as hex since characters constants of more
@@ -76,6 +77,7 @@ enum gbms_tags {
 	GBMS_TAG_DINF = 0x44494e46,
 	GBMS_TAG_DSNM = 0x44534e4d,
 	GBMS_TAG_DXAC = 0x44584143,
+	GBMS_TAG_FCRU = 0x46435255,
 	GBMS_TAG_FGST = 0x46475354,
 	GBMS_TAG_GCFE = 0x47434645,
 	GBMS_TAG_GMSR = 0x474d5352,
@@ -189,6 +191,10 @@ extern void gbee_destroy_device(void);
 extern int gbee_storage01_info(gbms_tag_t tag, size_t *addr, size_t *count, void *ptr);
 extern int gbee_storage01_iter(int index, gbms_tag_t *tag, void *ptr);
 
+/* version 2 */
+extern int gbee_storage02_info(gbms_tag_t tag, size_t *addr, size_t *count, void *ptr);
+extern int gbee_storage_read_data_02(gbms_tag_t tag, void *data, size_t count, int idx, void *ptr);
+
 /* defaults */
 extern int gbee_storage_info(gbms_tag_t tag, size_t *addr, size_t *count, void *ptr);
 
@@ -199,6 +205,11 @@ static inline int gbee_register_device(const char *name,
 { return -ENODEV; }
 
 static inline void gbee_destroy_device(void) { }
+
+static inline int gbee_storage02_info(gbms_tag_t tag, size_t *addr, size_t *count, void *ptr)
+{ return -ENODEV; }
+static inline int gbee_storage_read_data_02(gbms_tag_t tag, void *data, size_t count, int idx, void *ptr)
+{ return -ENODEV; }
 
 static inline int gbee_storage01_info(gbms_tag_t tag, size_t *addr, size_t *count, void *ptr)
 { return -ENODEV; }

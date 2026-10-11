@@ -15,7 +15,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/cleanup.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
 #include <linux/module.h>
@@ -29,6 +28,7 @@
 #include "google_bms.h"
 #include "google_psy.h"
 
+#define MAX(x, y)	((x) < (y) ? (y) : (x))
 #define DUAL_FG_DELAY_INIT_MS	500
 #define DUAL_FG_WORK_PERIOD_MS	10000
 #define DUAL_BATT_TEMP_VOTER	"daul_batt_temp"
@@ -329,7 +329,7 @@ static int gdbatt_get_dual_vbatt(struct dual_fg_drv *dual_fg_drv,
 	}
 	else {
 		/* use the max of base and flip vbatt as battery voltage */
-		dual_vbatt = max(base_vbatt, sec_vbatt);
+		dual_vbatt = MAX(base_vbatt, sec_vbatt);
 	}
 
 	return dual_vbatt;
@@ -707,11 +707,11 @@ static int gdbatt_get_property(struct power_supply *psy,
 		val->intval = fg_1.intval + fg_2.intval;
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
-		val->intval = max(fg_1.intval, fg_2.intval);
+		val->intval = MAX(fg_1.intval, fg_2.intval);
 		break;
 	case POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG:
 	case POWER_SUPPLY_PROP_TIME_TO_FULL_AVG:
-		val->intval = max(fg_1.intval, fg_2.intval);
+		val->intval = MAX(fg_1.intval, fg_2.intval);
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		val->intval = gdbatt_get_dual_vbatt(dual_fg_drv, fg_1.intval, fg_2.intval);
@@ -727,7 +727,7 @@ static int gdbatt_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		/* larger one is bad. TODO: confirm its priority */
-		val->intval = max(fg_1.intval, fg_2.intval);
+		val->intval = MAX(fg_1.intval, fg_2.intval);
 		break;
 	case POWER_SUPPLY_PROP_STATUS:
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
@@ -828,6 +828,7 @@ static int gdbatt_gbms_get_property(struct power_supply *psy,
 	case GBMS_PROP_CAPACITY_FADE_RATE:
 	case GBMS_PROP_CAPACITY_FADE_RATE_FCR:
 	case GBMS_PROP_BATT_ID:
+	case GBMS_PROP_AAFV:
 		val->prop.intval = fg_1.prop.intval;
 		break;
 	case GBMS_PROP_RECAL_FG:
@@ -894,6 +895,18 @@ static int gdbatt_gbms_set_property(struct power_supply *psy,
 	case GBMS_PROP_RECAL_FG:
 		/* TODO: under porting */
 		break;
+	case GBMS_PROP_AAFV:
+		if (dual_fg_drv->first_fg_psy) {
+			ret = GPSY_SET_PROP(dual_fg_drv->first_fg_psy, psp, val->prop.intval);
+			if (ret < 0)
+				pr_err("Cannot set aafv to the first FG, ret=%d\n", ret);
+		}
+		if (dual_fg_drv->second_fg_psy) {
+			ret = GPSY_SET_PROP(dual_fg_drv->second_fg_psy, psp, val->prop.intval);
+			if (ret < 0)
+				pr_err("Cannot set aafv to the second FG, ret=%d\n", ret);
+		}
+		break;
 	default:
 		pr_debug("%s: route to gdbatt_set_property, psp:%d\n", __func__, psp);
 		return -ENODATA;
@@ -912,6 +925,7 @@ static int gdbatt_gbms_property_is_writeable(struct power_supply *psy,
 {
 	switch (psp) {
 	case GBMS_PROP_BATT_CE_CTRL:
+	case GBMS_PROP_AAFV:
 		return 1;
 	default:
 		break;
@@ -937,7 +951,7 @@ static struct gbms_desc gdbatt_psy_desc = {
 /* ------------------------------------------------------------------------ */
 
 static int gdbatt_init_pack_chg_profile(struct gbms_chg_profile *pack_profile,
-					const struct device_node *node,
+					struct device_node *node,
 					const struct gbms_chg_profile *profile,
 					u32 capacity_ma)
 {
@@ -966,7 +980,7 @@ static int gdbatt_init_pack_chg_profile(struct gbms_chg_profile *pack_profile,
 	/* chg-battery-capacity is in mAh, chg-cc-limits relative to 100 */
 	for (ti = 0; ti < pack_profile->temp_nb_limits - 1; ti++) {
 		for (vi = 0; vi < pack_profile->volt_nb_limits; vi++) {
-			ccm = GBMS_CCCM_LIMITS(pack_profile, ti, vi);
+			ccm = GBMS_CCCM_LIMITS_GET(pack_profile, ti, vi);
 			ccm *= capacity_ma * 10;
 
 			GBMS_CCCM_LIMITS_SET(pack_profile, ti, vi) = ccm;
@@ -979,8 +993,7 @@ static int gdbatt_init_pack_chg_profile(struct gbms_chg_profile *pack_profile,
 
 static int gdbatt_init_chg_profile(struct dual_fg_drv *dual_fg_drv)
 {
-	struct device_node *node __free(device_node)
-		= of_find_node_by_name(NULL, "google,battery");
+	struct device_node *node = of_find_node_by_name(NULL, "google,battery");
 	struct device_node *dual_fg_node = dual_fg_drv->device->of_node;
 	struct gbms_chg_profile *profile = &dual_fg_drv->chg_profile;
 	int ret = 0;
@@ -1308,12 +1321,12 @@ static int google_dual_batt_gauge_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void google_dual_batt_gauge_remove(struct platform_device *pdev)
+static int google_dual_batt_gauge_remove(struct platform_device *pdev)
 {
 	struct dual_fg_drv *dual_fg_drv = platform_get_drvdata(pdev);
 
 	if (!dual_fg_drv)
-		return;
+		return 0;
 
 	power_supply_unreg_notifier(&dual_fg_drv->fg_nb);
 	gbms_free_chg_profile(&dual_fg_drv->chg_profile);
@@ -1323,6 +1336,7 @@ static void google_dual_batt_gauge_remove(struct platform_device *pdev)
 	if (dual_fg_drv->log)
 		logbuffer_unregister(dual_fg_drv->log);
 
+	return 0;
 }
 
 static void google_dual_batt_gauge_shutdown(struct platform_device *pdev)

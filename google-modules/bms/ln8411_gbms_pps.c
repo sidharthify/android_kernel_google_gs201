@@ -8,7 +8,6 @@
  */
 
 
-#include <linux/cleanup.h>
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/version.h>
@@ -34,19 +33,17 @@ static struct device_node *ln8411_find_config(struct device_node *node)
 
 	if (!node)
 		return node;
-
 	temp = of_parse_phandle(node, "ln8411,google_cpm", 0);
 	if (temp)
-		return temp;
-
-	return of_node_get(node);
+		node = temp;
+	return node;
 }
 
 int ln8411_probe_pps(struct ln8411_charger *ln8411_chg)
 {
 	const char *tmp_name = NULL;
 	bool pps_available = false;
-	struct device_node *node __free(device_node);
+	struct device_node *node;
 	int ret;
 
 	node = ln8411_find_config(ln8411_chg->dev->of_node);
@@ -124,7 +121,7 @@ int ln8411_usbpd_setup(struct ln8411_charger *ln8411)
 
 		ln8411->pd = tcpm_psy;
 	} else if (ln8411->tcpm_phandle) {
-		struct device_node *node __free(device_node);
+		struct device_node *node;
 
 		node = ln8411_find_config(ln8411->dev->of_node);
 		if (!node)

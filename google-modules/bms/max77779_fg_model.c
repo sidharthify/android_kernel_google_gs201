@@ -901,7 +901,7 @@ int max77779_fg_model_sscan(struct max77779_model_data *model_data, const char *
 
 static int max77779_init_custom_parameters(struct device *dev,
 					   struct max77779_custom_parameters *cp,
-					   const struct device_node *node)
+					   struct device_node *node)
 {
 	const char *propname = "max77779,fg-params";
 	const int cnt_default = sizeof(*cp) / 2;
@@ -935,7 +935,7 @@ void max77779_free_data(struct max77779_model_data *model_data)
 }
 
 /* mark model_data->model_version as invalid to prevent from reloading if failed to read */
-void *max77779_init_data(struct device *dev, const struct device_node *node,
+void *max77779_init_data(struct device *dev, struct device_node *node,
 			 struct maxfg_regmap *regmap, struct maxfg_regmap *debug_regmap)
 {
 	const char *propname = "max77779,fg-model";
@@ -1000,4 +1000,19 @@ void *max77779_init_data(struct device *dev, const struct device_node *node,
 	model_data->dev = dev;
 
 	return model_data;
+}
+
+/*
+ * The model data's custom_parameters contain values for FullSOCThr and MISCCFG.
+ *  - before the model data is loaded using max77779_fg_model_load,
+ *    these values must be updated based on aafv.
+ */
+void max77779_model_apply_aaf_fullsoc(struct max77779_model_data *model_data,
+				      const struct aafv_fg_config *cfg)
+{
+	struct max77779_custom_parameters *cp = &model_data->parameters;
+
+	cp->fullsocthr = percentage_to_reg(cfg->fullsoc);
+	cp->misccfg = (MAX77779_FG_MiscCfg_FUS_CLEAR & cp->misccfg) |
+		      (cfg->fus << MAX77779_FG_MiscCfg_FUS_SHIFT);
 }

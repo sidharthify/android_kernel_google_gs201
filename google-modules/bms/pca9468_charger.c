@@ -4823,9 +4823,9 @@ static int of_pca9468_dt(struct device *dev,
 #endif /* CONFIG_OF */
 
 #ifdef CONFIG_THERMAL
-static int pca9468_usb_tz_read_temp(struct thermal_zone_device *tz, int *temp)
+static int pca9468_usb_tz_read_temp(struct thermal_zone_device *tzd, int *temp)
 {
-	struct pca9468_charger *pca9468 = thermal_zone_device_priv(tz);
+	struct pca9468_charger *pca9468 = tzd->devdata;
 
 	if (!pca9468)
 		return -ENODEV;
@@ -5117,7 +5117,8 @@ static int pca9468_create_fs_entries(struct pca9468_charger *chip)
 }
 
 
-static int pca9468_probe(struct i2c_client *client)
+static int pca9468_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	static char *battery[] = { "pca9468-battery" };
 	struct power_supply_config mains_cfg = {};
@@ -5255,10 +5256,10 @@ static int pca9468_probe(struct i2c_client *client)
 #ifdef CONFIG_THERMAL
 	if (pdata->usb_tz_name) {
 		pca9468_chg->usb_tzd =
-			thermal_tripless_zone_device_register(pdata->usb_tz_name,
-							      pca9468_chg,
-							      &pca9468_usb_tzd_ops,
-							      NULL);
+			thermal_zone_device_register(pdata->usb_tz_name, 0, 0,
+						     pca9468_chg,
+						     &pca9468_usb_tzd_ops,
+						     NULL, 0, 0);
 		if (IS_ERR(pca9468_chg->usb_tzd)) {
 			pca9468_chg->usb_tzd = NULL;
 			ret = PTR_ERR(pca9468_chg->usb_tzd);

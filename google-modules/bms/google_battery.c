@@ -19,7 +19,6 @@
 #define SUPPORT_PM_SLEEP 1
 #endif
 
-#include <linux/cleanup.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
 #include <linux/module.h>
@@ -63,8 +62,12 @@
 /* AAFV default slope is disabled by default */
 #define AAFV_APPLY_MAX_DEFAULT		0 /* disabled */
 #define AAFV_MAX_OFFSET_DEFAULT		100
-#define AAFV_CLIFF_CYCLE_DEFAULT	1000
+#define AAFV_CLIFF_CYCLE_DEFAULT	-1
 #define AAFV_CLIFF_OFFSET_DEFAULT	100
+
+/* AACP */
+#define AACP_OPT_OUT_CUT_OFF_DISABLED		-1 /* no cutoff */
+#define AACP_OPT_OUT_CUT_OFF_CYCLES_DEFAULT	AACP_OPT_OUT_CUT_OFF_DISABLED
 
 /* qual time is 0 minutes of charge or 0% increase in SOC */
 #define DEFAULT_CHG_STATS_MIN_QUAL_TIME		0
@@ -76,6 +79,7 @@
 #define RL_STATE_VOTER	"rl_state"
 #define MSC_HEALTH_VOTER "chg_health"
 #define BPST_DETECT_VOTER "bpst_detect"
+#define FCRU_CHARGE_VOTER "fcr_update"
 
 #define UICURVE_MAX	3
 
@@ -100,6 +104,8 @@
 #define BHI_ROUND_INDEX(index) 		\
 	(((index) + BHI_ALGO_ROUND_INDEX) / 100)
 
+#define DEFAULT_FORCE_FCR_UPDATE_CYCLE	10
+#define DEFAULT_FORCE_FRC_UPDATE_FCR_DELTA	0
 
 /* TODO: this is for Adaptive charging, rename */
 enum batt_health_ui {
@@ -269,16 +275,29 @@ enum batt_lfcollect_status {
 	BATT_LFCOLLECT_COLLECT = 2,
 };
 
+enum batt_aacp_state {
+	BATT_AA_STATE_UNAVAILABLE	= -1,
+	BATT_AA_STATE_DISABLED		= 0,
+	BATT_AA_STATE_ENABLED		= 1,
+};
+
 enum batt_aacr_state {
-	BATT_AACR_UNKNOWN = -3,
-	BATT_AACR_INVALID_CAP = -2,
-	BATT_AACR_UNDER_CYCLES = -1,
+	BATT_AACR_UNKNOWN = -1,
 	BATT_AACR_DISABLED = 0,
 	BATT_AACR_ENABLED = 1,
-	BATT_AACR_ALGO_DEFAULT = BATT_AACR_ENABLED,
-	BATT_AACR_ALGO_LOW_B, /* lower bound */
-	BATT_AACR_ALGO_REFERENCE_CAP, /* reference capacity only */
 	BATT_AACR_MAX,
+};
+
+enum batt_aacr_algo {
+	BATT_AACR_ALGO_UP_B  = 2, 	  /* reference is the lower limit */
+	BATT_AACR_ALGO_REFERENCE_CAP = 3, /* reference is the charge capacity */
+	BATT_AACR_ALGO_LOW_B = 4,	  /* reference is the upper limit */
+	BATT_AACR_ALGO_DEFAULT = BATT_AACR_ALGO_UP_B,
+};
+
+enum batt_aacr_phase {
+	BATT_AACR_INVALID_CAP = -3,
+	BATT_AACR_UNDER_CYCLES = -2,
 };
 
 enum batt_aafv_state {
@@ -286,6 +305,24 @@ enum batt_aafv_state {
 	BATT_AAFV_DISABLED = 0,
 	BATT_AAFV_ENABLED = 1,
 	BATT_AAFV_MAX,
+};
+
+enum batt_aact_state {
+	BATT_AACT_UNKNOWN = -1,
+	BATT_AACT_DISABLED = 0,
+	BATT_AACT_ENABLED = 1,
+	BATT_AACT_MAX,
+};
+
+enum batt_aacp_opt_out {
+	BATT_AACP_OPT_OUT_DISABLED = 0,
+	BATT_AACP_OPT_OUT_ENABLED = 1,
+	BATT_AACP_OPT_OUT_MAX,
+};
+
+enum batt_fcr_update_ops {
+	BATT_FCR_UPDATE_DISABLE = 0,
+	BATT_FCR_UPDATE_FULLCHARGE_DELTA = 1,
 };
 
 #define BATT_TEMP_RECORD_THR 3
@@ -325,6 +362,7 @@ struct bhi_weight bhi_w[] = {
 	[BHI_ALGO_ACHI_RAVG_B] = {100, 0, 0},
 	[BHI_ALGO_MIX_N_MATCH] = {90, 0, 10},
 	[BHI_ALGO_ACHI_FCR] = {100, 0, 0},
+	[BHI_ALGO_ACHI_CARETAKER] = {100, 0, 0},
 };
 
 struct bm_date {
@@ -410,6 +448,9 @@ struct health_data
 	u8 cal_mode;
 	u8 cal_state;
 	int cal_target;
+
+	/* algo BHI_ALGO_ACHI_CARETAKER status */
+	enum bhi_status caretaker_status;
 };
 
 #define POWER_METRICS_MAX_DATA	50
@@ -525,8 +566,7 @@ struct batt_drv {
 	/* fg cycle count */
 	int cycle_count;
 	/* for testing */
-	int fake_aacr_cc;
-	int fake_aafv_cc;
+	int fake_aacp_cc;
 
 	/* props */
 	int soh;
@@ -635,6 +675,7 @@ struct batt_drv {
 
 	/* AACR: Aged Adjusted Charging Rate */
 	enum batt_aacr_state aacr_state;
+	enum batt_aacr_phase aacr_phase;
 	int aacr_cycle_grace;
 	int aacr_cycle_max;
 	int aacr_algo;
@@ -648,7 +689,22 @@ struct batt_drv {
 	int aafv_cliff_cycle;
 	int aafv_cliff_offset;
 	struct logbuffer *bd_log;
-	struct mutex aafv_state_lock;
+
+	/* AACT: Aged Adjusted Charge Table */
+	enum batt_aact_state aact_state;
+
+	/* AACP: Configuration Version for AAFV, AACR and AACT for the device */
+	int aacp_version;
+	/* this is used for opt_cout cutoff */
+	enum batt_aacp_opt_out aacp_opt_out;
+	struct mutex aacp_state_lock;
+	int aacp_opt_out_cut_off_cycles;
+	int aacp_health_over_cliff;
+	int aacp_health_over_cutoff;
+	int aacp_health_last_entry;
+
+	/* AACC: Age adjusted cycle count */
+	int aacc;
 
 	/* BHI: updated on disconnect, EOC */
 	struct health_data health_data;
@@ -693,6 +749,13 @@ struct batt_drv {
 
 	/* for testing drain battery not shutdown */
 	int restrict_level_critical;
+
+	/* force charge to 100% even with charge limit to update FCR */
+	int force_fcr_update_cycle;
+	int last_full_charge;
+	bool vote_force_full_charge;
+
+	int force_fcr_update_ops;
 };
 
 static int gbatt_get_temp(struct batt_drv *batt_drv, int *temp);
@@ -702,6 +765,49 @@ static int ssoc_get_capacity(const struct batt_ssoc_state *ssoc);
 static int batt_ttf_estimate(ktime_t *res, struct batt_drv *batt_drv);
 
 static int gbatt_restore_capacity(struct batt_drv *batt_drv);
+static bool aafv_update_float_voltage(struct batt_drv *batt_drv, int *fv_uv);
+
+static bool aafv_enabled(const int state, const int opt_out)
+{
+	switch(state) {
+		case BATT_AAFV_UNKNOWN:
+			return false;
+		case BATT_AAFV_ENABLED:
+			return true;
+		case BATT_AAFV_DISABLED:
+			return !opt_out;
+		default:
+			return false;
+	}
+}
+
+static bool aact_enabled(const int state, const int opt_out)
+{
+	switch(state) {
+		case BATT_AACT_UNKNOWN:
+			return false;
+		case BATT_AACT_ENABLED:
+			return true;
+		case BATT_AACT_DISABLED:
+			return !opt_out;
+		default:
+			return false;
+	}
+}
+
+static bool aacr_enabled(const int state, const int opt_out)
+{
+	switch(state) {
+		case BATT_AACR_UNKNOWN:
+			return false;
+		case BATT_AACR_ENABLED:
+			return true;
+		case BATT_AACR_DISABLED:
+			return !opt_out;
+		default:
+			return false;
+	}
+}
 
 static int batt_get_filter_temp(struct batt_temp_filter *temp_filter)
 {
@@ -753,7 +859,7 @@ static inline void batt_update_cycle_count(struct batt_drv *batt_drv)
 
 static int google_battery_tz_get_cycle_count(struct thermal_zone_device *tz, int *cycle_count)
 {
-	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
+	struct batt_drv *batt_drv = (struct batt_drv *)tz->devdata;
 
 	if (!cycle_count) {
 		pr_err("Cycle Count NULL");
@@ -768,9 +874,9 @@ static int google_battery_tz_get_cycle_count(struct thermal_zone_device *tz, int
 	return 0;
 }
 
-static int batt_vs_tz_get(struct thermal_zone_device *tz, int *batt_vs)
+static int batt_vs_tz_get(struct thermal_zone_device *tzd, int *batt_vs)
 {
-	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
+	struct batt_drv *batt_drv = tzd->devdata;
 	int temp, rc;
 	unsigned int ibat;
 	unsigned long vs_tmp;
@@ -900,9 +1006,9 @@ done:
 	return false;
 }
 
-static int batt_vs_mp_tz_get(struct thermal_zone_device *tz, int *batt_vs)
+static int batt_vs_mp_tz_get(struct thermal_zone_device *tzd, int *batt_vs)
 {
-	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
+	struct batt_drv *batt_drv = tzd->devdata;
 
 	if (!batt_vs)
 		return -EINVAL;
@@ -928,9 +1034,9 @@ static int hda_tz_cb(struct gvotable_election *el,
 	return 0;
 }
 
-static int batt_vs_hda_tz_get(struct thermal_zone_device *tz, int *batt_vs)
+static int batt_vs_hda_tz_get(struct thermal_zone_device *tzd, int *batt_vs)
 {
-	struct batt_drv *batt_drv = thermal_zone_device_priv(tz);
+	struct batt_drv *batt_drv = tzd->devdata;
 
 	if (!batt_vs)
 		return -EINVAL;
@@ -1540,7 +1646,7 @@ static bool batt_rl_enter(struct batt_ssoc_state *ssoc_state,
 }
 
 static int ssoc_rl_read_dt(struct batt_ssoc_rl_state *rls,
-			   const struct device_node *node)
+			   struct device_node *node)
 {
 	u32 tmp, delta_soc[RL_DELTA_SOC_MAX];
 	int ret, i;
@@ -1752,6 +1858,29 @@ static bool batt_charge_to_limit_enable(const struct batt_chg_health *chg_health
 	return chg_health->rest_rate == 0 && chg_health->always_on_soc > 0;
 }
 
+/* batt_drv->batt_lock is acquired by a caller */
+static void batt_force_fcr_update_charging_policy(struct batt_drv *batt_drv, bool update)
+{
+	if (batt_drv->vote_force_full_charge == update)
+		return;
+
+	gvotable_cast_long_vote(batt_drv->charging_policy_votable, FCRU_CHARGE_VOTER,
+				CHARGING_POLICY_VOTE_FORCE_FULL_CHARGE, update);
+	batt_drv->vote_force_full_charge = update;
+}
+
+static bool batt_need_force_fcr_update(struct batt_drv *batt_drv)
+{
+	switch (batt_drv->force_fcr_update_ops) {
+	case BATT_FCR_UPDATE_DISABLE:
+		return false;
+	case BATT_FCR_UPDATE_FULLCHARGE_DELTA:
+		return batt_drv->hist_data_saved_cnt - batt_drv->last_full_charge >=
+		       batt_drv->force_fcr_update_cycle;
+	default:
+		return true;
+	}
+}
 /*
  * msc_logic_health() sync ce_data->ce_health to batt_drv->chg_health
  * . return -EINVAL when the device is not connected to power -ERANGE when
@@ -1764,10 +1893,11 @@ static bool batt_charge_to_limit_enable(const struct batt_chg_health *chg_health
 #define MIN_DELTA_FOR_LOG_S 60
 static int batt_ttf_estimate(ktime_t *res, struct batt_drv *batt_drv)
 {
-	qnum_t raw_full = ssoc_point_full - qnum_rconst(SOC_ROUND_BASE);
 	qnum_t soc_raw = ssoc_get_real_raw(&batt_drv->ssoc_state);
 	ktime_t estimate = 0;
 	int rc = 0, max_ratio = 0, ssoc_full = SSOC_FULL;
+	const bool need_fcr_update = batt_need_force_fcr_update(batt_drv);
+	qnum_t raw_full;
 
 	if (batt_drv->ssoc_state.buck_enabled != 1)
 		return -EINVAL;
@@ -1777,13 +1907,18 @@ static int batt_ttf_estimate(ktime_t *res, struct batt_drv *batt_drv)
 		goto done;
 	}
 
-	if (batt_drv->charging_policy == CHARGING_POLICY_VOTE_LONGLIFE) {
-		ssoc_full = LONGLIFE_CHARGE_STOP_LEVEL;
-		raw_full = qnum_fromint(ssoc_full) - qnum_rconst(SOC_ROUND_BASE);
-	} else if (batt_charge_to_limit_enable(&batt_drv->chg_health)) {
-		ssoc_full = batt_drv->chg_health.always_on_soc;
-		raw_full = qnum_fromint(ssoc_full) - qnum_rconst(SOC_ROUND_BASE);
+	if (!need_fcr_update) {
+		if (batt_drv->charging_policy == CHARGING_POLICY_VOTE_LONGLIFE)
+			ssoc_full = LONGLIFE_CHARGE_STOP_LEVEL;
+		else if (batt_charge_to_limit_enable(&batt_drv->chg_health))
+			ssoc_full = batt_drv->chg_health.always_on_soc;
 	}
+
+	if (batt_drv->charging_policy == CHARGING_POLICY_VOTE_LONGLIFE)
+		batt_force_fcr_update_charging_policy(batt_drv, need_fcr_update);
+
+
+	raw_full = qnum_fromint(ssoc_full) - qnum_rconst(SOC_ROUND_BASE);
 
 	/* TTF is 0 when over ssoc_full */
 	if (ssoc_get_capacity(&batt_drv->ssoc_state) >= ssoc_full) {
@@ -1856,6 +1991,8 @@ static void cev_stats_init(struct gbms_charging_event *ce_data,
 	gbms_tier_stats_init(&ce_data->cc_lvl_stats, GBMS_STATS_BD_TI_CUSTOM_LEVELS);
 	gbms_tier_stats_init(&ce_data->trickle_stats, GBMS_STATS_BD_TI_TRICKLE_CLEARED);
 	gbms_tier_stats_init(&ce_data->temp_filter_stats, GBMS_STATS_TEMP_FILTER);
+	gbms_tier_stats_init(&ce_data->policy_longlife_stats, GBMS_STATS_BD_TI_POLICY_LONGLIFE);
+	gbms_tier_stats_init(&ce_data->policy_force_full_stats, GBMS_STATS_BD_TI_POLICY_FORCE_TO_FULL);
 }
 
 static void batt_chg_stats_start(struct batt_drv *batt_drv)
@@ -1935,6 +2072,8 @@ static void batt_chg_stats_update(struct batt_drv *batt_drv, int temp_idx,
 	const int msc_state = batt_drv->msc_state; /* last msc_state */
 	struct gbms_charging_event *ce_data = &batt_drv->ce_data;
 	struct gbms_ce_tier_stats *tier = NULL;
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	const int last_vbatt_idx = profile->volt_nb_limits - 1;
 	int cc, soc_in;
 
 	if (elap == 0)
@@ -1958,6 +2097,11 @@ static void batt_chg_stats_update(struct batt_drv *batt_drv, int temp_idx,
 	/* Log CSI info into chg_stats */
 	ce_data->csi_aggregate_status = batt_drv->csi_stats.aggregate_status;
 	ce_data->csi_aggregate_type = batt_drv->csi_stats.aggregate_type;
+
+	/* Log aacp_version, aacc and aafv into chg_stats */
+	ce_data->aacp_version = batt_drv->aacp_version;
+	ce_data->aacc = batt_drv->aacc;
+	ce_data->aafv = profile->volt_limits[last_vbatt_idx] / 1000;
 
 	/* Note: To log new voltage tiers, add to list in go/pixel-vtier-defs */
 	/* ---  Log tiers in PARALLEL below ---  */
@@ -2046,8 +2190,18 @@ static void batt_chg_stats_update(struct batt_drv *batt_drv, int temp_idx,
 		tier = NULL;
 	}
 
-	/* custom charge levels (DWELL-DEFEND or RETAIL) */
-	if (batt_drv->chg_state.f.flags & GBMS_CS_FLAG_CCLVL) {
+	/* custom charge levels (DWELL-DEFEND or RETAIL or LONGLIFE) */
+	if (batt_drv->vote_force_full_charge) {
+		gbms_stats_update_tier(temp_idx, ibatt_ma, temp, elap, cc,
+				       &batt_drv->chg_state, msc_state, soc_in,
+				       &ce_data->policy_force_full_stats);
+		tier = NULL;
+	} else if (batt_drv->charging_policy == CHARGING_POLICY_VOTE_LONGLIFE) {
+		gbms_stats_update_tier(temp_idx, ibatt_ma, temp, elap, cc,
+				       &batt_drv->chg_state, msc_state, soc_in,
+				       &ce_data->policy_longlife_stats);
+		tier = NULL;
+	} else if (batt_drv->chg_state.f.flags & GBMS_CS_FLAG_CCLVL) {
 		gbms_stats_update_tier(temp_idx, ibatt_ma, temp, elap, cc,
 				       &batt_drv->chg_state, msc_state, soc_in,
 				       &ce_data->cc_lvl_stats);
@@ -2362,7 +2516,7 @@ static int batt_chg_stats_cstr(char *buff, int size,
 				ce_data->adapter_details.ad_voltage * 100,
 				ce_data->adapter_details.ad_amperage * 100);
 
-	len += scnprintf(&buff[len], size - len, "%s%hu,%hu, %hu,%hu %d %hu,%hu",
+	len += scnprintf(&buff[len], size - len, "%s%hu,%hu, %hu,%hu %d %hu,%hu, %d,%d,%d,%d",
 				(verbose) ?  "\nS: " : ", ",
 				ce_data->charging_stats.ssoc_in,
 				ce_data->charging_stats.voltage_in,
@@ -2370,7 +2524,11 @@ static int batt_chg_stats_cstr(char *buff, int size,
 				ce_data->charging_stats.voltage_out,
 				state_capacity,
 				ce_data->csi_aggregate_status,
-				ce_data->csi_aggregate_type);
+				ce_data->csi_aggregate_type,
+				ce_data->aacp_version,
+				ce_data->aacc,
+				ce_data->aafv,
+				ce_data->max_charge_voltage / 1000);
 
 
 	if (verbose) {
@@ -2433,6 +2591,16 @@ static int batt_chg_stats_cstr(char *buff, int size,
 	if (ce_data->temp_filter_stats.soc_in != -1)
 		len += gbms_tier_stats_cstr(&buff[len], size - len,
 					    &ce_data->temp_filter_stats,
+					    verbose);
+
+	if (ce_data->policy_longlife_stats.soc_in != -1)
+		len += gbms_tier_stats_cstr(&buff[len], size - len,
+					    &ce_data->policy_longlife_stats,
+					    verbose);
+
+	if (ce_data->policy_force_full_stats.soc_in != -1)
+		len += gbms_tier_stats_cstr(&buff[len], size - len,
+					    &ce_data->policy_force_full_stats,
 					    verbose);
 
 	/* If bd_clear triggers, we need to know about it even if trickle hasn't
@@ -3618,7 +3786,6 @@ static bool msc_health_pause(struct batt_drv *batt_drv, const ktime_t ttf,
 	return false;
 }
 
-
 /*
  * for logging, userspace should use
  *   deadline == 0 on fast replug (leave initial deadline ok)
@@ -3628,6 +3795,7 @@ static bool msc_health_pause(struct batt_drv *batt_drv, const ktime_t ttf,
  * return true if there was a change
  */
 static bool batt_health_set_chg_deadline(struct batt_chg_health *chg_health,
+					 long long ttf_with_margin,
 					 long long deadline_s)
 {
 	enum chg_health_state rest_state = chg_health->rest_state;
@@ -3659,10 +3827,15 @@ static bool batt_health_set_chg_deadline(struct batt_chg_health *chg_health,
 
 	} else { /* enabled from any previous state */
 		const ktime_t rest_deadline = get_boot_sec() + deadline_s;
+		enum chg_health_state new_rest_state = CHG_HEALTH_ENABLED;
 
 		/* ->always_on SOC overrides the deadline */
 		new_deadline = chg_health->rest_deadline != rest_deadline;
-		chg_health->rest_state = CHG_HEALTH_ENABLED;
+
+		if (rest_deadline < ttf_with_margin)
+			new_rest_state = CHG_HEALTH_DISABLED;
+
+		chg_health->rest_state = new_rest_state;
 		chg_health->rest_deadline = rest_deadline;
 	}
 
@@ -3682,7 +3855,7 @@ static bool msc_logic_health(struct batt_drv *batt_drv)
 	const ktime_t now = get_boot_sec();
 	int fv_uv = -1, cc_max = -1;
 	bool changed = false;
-	ktime_t ttf = 0;
+	ktime_t ttf = 0, safety_margin = 0;
 	int ret;
 
 	/* move to ENABLED if INACTIVE when aon_enabled is set */
@@ -3733,6 +3906,9 @@ static bool msc_logic_health(struct batt_drv *batt_drv)
 		goto done_exit;
 	}
 
+	if (batt_drv->health_safety_margin > 0)
+		safety_margin = batt_drv->health_safety_margin;
+
 	/*
 	 * rest_state here is either ENABLED or ACTIVE, transition to DISABLED
 	 * when the deadline cannot be met with the current rate. set a new
@@ -3743,8 +3919,9 @@ static bool msc_logic_health(struct batt_drv *batt_drv)
 	 * from CHG_HEALTH_USER_DISABLED.
 	 * TODO: consider adding a margin or debounce it.
 	 */
-	if (aon_enabled == false && rest_state == CHG_HEALTH_ACTIVE &&
-	    deadline > 0 && ttf != -1 && now + ttf > deadline) {
+	if (aon_enabled == false &&
+	    (rest_state == CHG_HEALTH_ACTIVE || rest_state == CHG_HEALTH_ENABLED) &&
+	    deadline > 0 && ttf != -1 && now + ttf + safety_margin > deadline) {
 		rest_state = CHG_HEALTH_DISABLED;
 		goto done_exit;
 	}
@@ -3797,13 +3974,15 @@ done_no_op:
 	changed = rest->rest_state != rest_state ||
 		  rest->rest_cc_max != cc_max || rest->rest_fv_uv != fv_uv;
 
-	/* msc_logic_* will vote on cc_max and fv_uv. */
-	rest->rest_cc_max = cc_max;
-	rest->rest_fv_uv = fv_uv;
-
 	if (!changed)
 		return false;
 
+	/* msc_logic_* will vote on cc_max and fv_uv. */
+	rest->rest_cc_max = cc_max;
+	if (fv_uv > 0)
+		aafv_update_float_voltage(batt_drv, &fv_uv);
+
+	rest->rest_fv_uv = fv_uv;
 	gbms_logbuffer_prlog(batt_drv->ttf_stats.ttf_log, LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
 			     "MSC_HEALTH: now=%lld deadline=%lld aon_soc=%d ttf=%lld state=%d->%d fv_uv=%d, cc_max=%d safety_margin=%d active_time:%lld",
 			     now, rest->rest_deadline, rest->always_on_soc, ttf, rest->rest_state,
@@ -3876,7 +4055,29 @@ static u32 aacr_get_reference_capacity(const struct batt_drv *batt_drv, int cycl
 	return design_capacity - (design_capacity * fade10 / 1000);
 }
 
+/* AACP ------------------------------------------------------------------- */
+
+static int aacp_get_cc(const struct batt_drv *batt_drv)
+{
+	return batt_drv->fake_aacp_cc ? batt_drv->fake_aacp_cc : batt_drv->aacc;
+}
+
+/* must be called holding aacp_state_lock */
+static void aacp_update_opt_out_cutoff(struct batt_drv *batt_drv)
+{
+	const int cycle_count = aacp_get_cc(batt_drv);
+
+	if (batt_drv->aacp_opt_out_cut_off_cycles == AACP_OPT_OUT_CUT_OFF_DISABLED)
+		return;
+
+	if (cycle_count >= batt_drv->aacp_opt_out_cut_off_cycles)
+		batt_drv->aacp_opt_out = BATT_AACP_OPT_OUT_DISABLED;
+}
+
+/* AACR ------------------------------------------------------------------- */
+
 /* 80% of design_capacity min, design_capacity in grace, aacr or negative */
+/* requires mutex_lock(&batt_drv->aacp_state_lock); */
 static int aacr_get_capacity_for_algo(const struct batt_drv *batt_drv, int cycle_count,
 				      int aacr_algo)
 {
@@ -3921,6 +4122,7 @@ static int aacr_get_capacity_for_algo(const struct batt_drv *batt_drv, int cycle
 	return aacr_capacity;
 }
 
+/* requires mutex_lock(&batt_drv->aacp_state_lock); */
 static int aacr_get_capacity_at_cycle(const struct batt_drv *batt_drv, int cycle_count)
 {
 	const int design_capacity = batt_drv->battery_capacity; /* mAh */
@@ -3933,29 +4135,26 @@ static int aacr_get_capacity_at_cycle(const struct batt_drv *batt_drv, int cycle
 }
 
 /* design_capacity when not enabled, never a negative value */
-static u32 aacr_get_capacity(struct batt_drv *batt_drv)
+/* requires mutex_lock(&batt_drv->aacp_state_lock); */
+static u32 aacr_get_capacity_locked(struct batt_drv *batt_drv)
 {
 	int capacity = batt_drv->battery_capacity;
 	int cycle_count;
 
-	if (batt_drv->fake_aacr_cc)
-		cycle_count = batt_drv->fake_aacr_cc;
-	else
-		cycle_count = batt_drv->cycle_count;
-
-	if (batt_drv->aacr_state == BATT_AACR_DISABLED)
+	if (aacr_enabled(batt_drv->aacr_state, batt_drv->aacp_opt_out) == false)
 		goto exit_done;
 
+	cycle_count = aacp_get_cc(batt_drv);
 	if (cycle_count <= batt_drv->aacr_cycle_grace) {
-		batt_drv->aacr_state = BATT_AACR_UNDER_CYCLES;
+		batt_drv->aacr_phase = BATT_AACR_UNDER_CYCLES;
 	} else {
 		int aacr_capacity;
 
 		aacr_capacity = aacr_get_capacity_at_cycle(batt_drv, cycle_count);
 		if (aacr_capacity < 0) {
-			batt_drv->aacr_state = BATT_AACR_INVALID_CAP;
+			batt_drv->aacr_phase = BATT_AACR_INVALID_CAP;
 		} else {
-			batt_drv->aacr_state = BATT_AACR_ENABLED;
+			batt_drv->aacr_phase = BATT_AACR_ENABLED;
 			capacity = aacr_capacity;
 		}
 	}
@@ -3966,8 +4165,9 @@ exit_done:
 
 static u32 aacr_filtered_capacity(struct batt_drv *batt_drv, struct gbms_charging_event *ce)
 {
-	return (batt_drv->aacr_state < BATT_AACR_ENABLED) ? batt_drv->aacr_state :
-							    ce->chg_profile->capacity_ma;
+	const bool enabled = aacr_enabled(batt_drv->aacr_state, batt_drv->aacp_opt_out);
+
+	return enabled ? ce->chg_profile->capacity_ma : batt_drv->aacr_state;
 }
 
 /* BHI -------------------------------------------------------------------- */
@@ -4137,25 +4337,27 @@ static int hist_get_index(int cycle_count, const struct batt_drv *batt_drv)
 static int bhi_cap_data_update(struct bhi_data *bhi_data, struct batt_drv *batt_drv)
 {
 	struct power_supply *fg_psy = batt_drv->fg_psy;
-	int rc, rc_fcr;
+	int rc, rc_fcr, tmp_cap_uah;
 	const int fade_rate = GPSY_GET_INT_PROP(fg_psy, GBMS_PROP_CAPACITY_FADE_RATE, &rc);
 	const int fade_rate_fcr =
 			GPSY_GET_INT_PROP(fg_psy, GBMS_PROP_CAPACITY_FADE_RATE_FCR, &rc_fcr);
-	const int designcap = GPSY_GET_PROP(fg_psy, POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN);
+	const int designcap_uah = GPSY_GET_PROP(fg_psy, POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN);
+	const int full_capacity = 100;
+	const int pack_capacity_uah = bhi_data->pack_capacity * 1000;
 
 	/* GBMS_PROP_CAPACITY_FADE_RATE is in percent */
-	if (designcap < 0)
+	if (designcap_uah < 0)
 		return -ENODATA;
 	if (bhi_data->pack_capacity <= 0)
 		return -EINVAL;
-	if (rc && rc_fcr)
+	if (rc || rc_fcr)
 		return -EINVAL;
 
-	if (rc == 0)
-		bhi_data->capacity_fade = fade_rate * designcap / (bhi_data->pack_capacity * 1000);
-	if (rc_fcr == 0)
-		bhi_data->capacity_fade_fcr =
-			fade_rate_fcr * designcap / (bhi_data->pack_capacity * 1000);
+	tmp_cap_uah = (full_capacity - fade_rate) * designcap_uah;
+	bhi_data->capacity_fade = full_capacity - (tmp_cap_uah / pack_capacity_uah);
+
+	tmp_cap_uah = (full_capacity - fade_rate_fcr) * designcap_uah;
+	bhi_data->capacity_fade_fcr = full_capacity - (tmp_cap_uah / pack_capacity_uah);
 
 	pr_debug("%s: cap_fade=%d, cap_fade_fcr=%d, cycle_count=%d\n", __func__,
 		 bhi_data->capacity_fade, bhi_data->capacity_fade_fcr, bhi_data->cycle_count);
@@ -4209,7 +4411,7 @@ static int bhi_get_capacity_bound(int cycle_count, const u16 *cap_bound)
 static bool bhi_algo_has_bounds(int algo)
 {
 	return algo == BHI_ALGO_ACHI_B || algo == BHI_ALGO_ACHI_RECAL ||
-	       algo == BHI_ALGO_ACHI_RAVG_B;
+	       algo == BHI_ALGO_ACHI_RAVG_B || algo == BHI_ALGO_ACHI_CARETAKER;
 }
 
 static int bhi_algo_apply_bounds(int algo, int capacity_health, int cycle_count,
@@ -4247,8 +4449,7 @@ static int bhi_calc_cap_index(int algo, struct batt_drv *batt_drv)
 	capacity_health = bhi_health_get_capacity(algo, bhi_data);
 
 	if (bhi_algo_has_bounds(algo)) {
-		const int cycle_count = batt_drv->fake_aacr_cc ?
-					batt_drv->fake_aacr_cc : batt_drv->cycle_count;
+		const int cycle_count = aacp_get_cc(batt_drv);
 
 		capacity_health = bhi_algo_apply_bounds(algo, capacity_health, cycle_count,
 							bhi_data);
@@ -4478,6 +4679,7 @@ static int bhi_calc_health_index(int algo, struct health_data *health_data,
 	case BHI_ALGO_ACHI_RAVG_B:
 	case BHI_ALGO_MIX_N_MATCH:
 	case BHI_ALGO_ACHI_FCR:
+	case BHI_ALGO_ACHI_CARETAKER:
 		w_ci = bhi_w[algo].w_ci;
 		w_ii = bhi_w[algo].w_ii;
 		w_sd = bhi_w[algo].w_sd;
@@ -4517,7 +4719,8 @@ static int bhi_calc_health_index(int algo, struct health_data *health_data,
 
 static bool bhi_algo_has_grace(int algo)
 {
-	return algo == BHI_ALGO_ACHI_B || algo == BHI_ALGO_ACHI_RAVG_B;
+	return algo == BHI_ALGO_ACHI_B || algo == BHI_ALGO_ACHI_RAVG_B ||
+	       algo == BHI_ALGO_ACHI_CARETAKER;
 }
 
 static enum bhi_status bhi_calc_health_status(int algo, int health_index,
@@ -4551,6 +4754,29 @@ static enum bhi_status bhi_calc_health_status(int algo, int health_index,
 		health_status = BH_MARGINAL;
 	else
 		health_status = BH_NOMINAL;
+
+	/* take the worse status between health_status and caretaker_status */
+	if (algo == BHI_ALGO_ACHI_CARETAKER)
+		health_status = max(health_status, data->caretaker_status);
+
+	return health_status;
+}
+
+static enum bhi_status bhi_get_caretaker_status(struct batt_drv *batt_drv)
+{
+	const int cycle_count = aacp_get_cc(batt_drv);
+	const int last_aafv_entry = gbms_aafv_get_last_entry(&batt_drv->chg_profile);
+	enum bhi_status health_status = BH_NOMINAL;
+
+	if (last_aafv_entry && cycle_count >= last_aafv_entry)
+		health_status = batt_drv->aacp_health_last_entry;
+
+	if (batt_drv->aacp_opt_out_cut_off_cycles != AACP_OPT_OUT_CUT_OFF_DISABLED
+		&& cycle_count >= batt_drv->aacp_opt_out_cut_off_cycles)
+		health_status = max(health_status, batt_drv->aacp_health_over_cutoff);
+
+	if (batt_drv->aafv_cliff_cycle >= 0 && cycle_count >= batt_drv->aafv_cliff_cycle)
+		health_status = max(health_status, batt_drv->aacp_health_over_cliff);
 
 	return health_status;
 }
@@ -4592,7 +4818,6 @@ static int batt_bhi_stats_update(struct batt_drv *batt_drv)
 	bool changed = false;
 	int age, index;
 
-
 	/* age (and cycle count* might be used in the calc */
 	age = GPSY_GET_PROP(fg_psy, GBMS_PROP_BATTERY_AGE);
 	if (age < 0)
@@ -4632,6 +4857,7 @@ static int batt_bhi_stats_update(struct batt_drv *batt_drv)
 	changed |= health_data->bhi_index != index;
 	health_data->bhi_index = index;
 
+	health_data->caretaker_status = bhi_get_caretaker_status(batt_drv);
 	status = bhi_calc_health_status(bhi_algo, BHI_ROUND_INDEX(index), health_data);
 	changed |= health_data->bhi_status != status;
 	health_data->bhi_status = status;
@@ -4821,11 +5047,18 @@ static int batt_init_aafv_profile(struct batt_drv *batt_drv)
 {
 	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
 	struct device_node *node = batt_drv->device->of_node;
-	int ret = 0;
+	int ret;
 
 	ret = gbms_read_aafv_limits(profile, gbms_batt_id_node(node));
 	dev_info(batt_drv->device, "AAFV: schedule supported: %s",
 		ret ? "not detected" : "detected");
+
+	/* NOTE: might need to be BRID specific */
+	ret = of_property_read_u32(node, "google,aafv-config",
+				   &batt_drv->aafv_state);
+	if (ret < 0)
+		batt_drv->aafv_state = profile->aafv_nb_limits ?
+			BATT_AAFV_DISABLED : BATT_AAFV_UNKNOWN;
 
 	ret = of_property_read_u32(node, "google,aafv-max-offset", &batt_drv->aafv_max_offset);
 	if (ret < 0)
@@ -4842,53 +5075,84 @@ static int batt_init_aafv_profile(struct batt_drv *batt_drv)
 	return 0;
 }
 
-static u32 aafv_update_state(struct batt_drv *batt_drv)
+/* requires mutex_lock(&batt_drv->aacp_state_lock); */
+static u32 aafv_get_offset_by_cycles(const struct batt_drv *batt_drv, int cycle_count)
 {
-	int cycle_count = batt_drv->cycle_count;
-	int offset, aafv_offset = 0;
+	int aafv_offset;
 
-	mutex_lock(&batt_drv->aafv_state_lock);
-
-	if (batt_drv->aafv_state == BATT_AAFV_DISABLED)
-		goto exit_done;
-
-	if (batt_drv->fake_aafv_cc)
-		cycle_count = batt_drv->fake_aafv_cc;
+	if (aafv_enabled(batt_drv->aafv_state, batt_drv->aacp_opt_out) == false)
+		return 0;
 
 	if (batt_drv->aafv_apply_max)
-		offset = batt_drv->aafv_max_offset;
-	else if (cycle_count >= batt_drv->aafv_cliff_cycle)
-		offset = batt_drv->aafv_cliff_offset;
+		aafv_offset = batt_drv->aafv_max_offset;
+	else if (batt_drv->aafv_cliff_cycle >= 0 && cycle_count >= batt_drv->aafv_cliff_cycle)
+		aafv_offset = batt_drv->aafv_cliff_offset;
 	else
-		offset = gbms_aafv_get_offset(&batt_drv->chg_profile, cycle_count);
+		aafv_offset = gbms_aafv_get_offset(&batt_drv->chg_profile, cycle_count);
 
-	batt_drv->aafv_state = BATT_AAFV_ENABLED;
-	aafv_offset = offset * 1000;
-
-exit_done:
-	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
-			     "AAFV: of=%d, cc=%d, st=%d, clf_c=%d, clf_o=%d",
-			     aafv_offset / 1000, cycle_count, batt_drv->aafv_state,
-			     batt_drv->aafv_cliff_cycle, batt_drv->aafv_cliff_offset);
-
-	batt_drv->chg_profile.aafv_offset = (u32)aafv_offset;
-
-	mutex_unlock(&batt_drv->aafv_state_lock);
-
-	return (u32)aafv_offset;
+	return (u32)(aafv_offset * GBMS_AAFV_VOLTAGE_OFFSET_SCALE);
 }
 
-static void aafv_update_voltage(struct batt_drv *batt_drv, int *fv_uv, const int last_vbatt_idx)
+/*
+ * executed at connect, when opt_out changes or when server side changes
+ * the state.
+ * requires mutex_lock(&batt_drv->aacp_state_lock);
+ */
+static void aafv_update_offset(struct batt_drv *batt_drv)
+{
+	const int cycle_count = aacp_get_cc(batt_drv);
+	u32 aafv_offset;
+	int fg_ret;
+
+	/*  aafv_offset==0 when aafv is disabled */
+	aafv_offset = aafv_get_offset_by_cycles(batt_drv, cycle_count);
+	if (batt_drv->chg_profile.aafv_offset == aafv_offset)
+		return;
+
+	fg_ret = GPSY_SET_PROP(batt_drv->fg_psy, GBMS_PROP_AAFV, aafv_offset);
+
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+		"AAFV: cc:%d, st:%d, oo:%d, of:%d->%d (fg_ret=%d)",
+		cycle_count, batt_drv->aafv_state, batt_drv->aacp_opt_out,
+		batt_drv->chg_profile.aafv_offset, aafv_offset, fg_ret);
+
+	/* will try again on next connect if setting the fg failed */
+	if (fg_ret == 0)
+		batt_drv->chg_profile.aafv_offset = aafv_offset;
+}
+
+/* requires mutex_lock(&batt_drv->aacp_state_lock); */
+static bool aafv_update_float_voltage(struct batt_drv *batt_drv, int *fv_uv)
 {
 	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	const int last_vbatt_idx = profile->volt_nb_limits - 1;
 	const u32 last_fv = profile->volt_limits[last_vbatt_idx];
 	const u32 penultimate_fv = (last_vbatt_idx >= 1) ?
 			profile->volt_limits[last_vbatt_idx - 1] : 0;
-	u32 aafv_fv, aafv_offset = aafv_update_state(batt_drv);
+	bool is_last = *fv_uv == last_fv;
+	u32 aafv_fv;
 
-	aafv_fv = last_fv - aafv_offset;
+	/*
+	 * only lower last charge tier if higher than the adjusted
+	 * NOTE: assumes that ->chg_profile.aafv_offset is correct
+	 * for the cycle count. aafv_offset is updated when the device
+	 * start charging or when server side changes the configuration
+	 */
+	aafv_fv = last_fv - batt_drv->chg_profile.aafv_offset;
 	if (aafv_fv > penultimate_fv && aafv_fv < last_fv)
 		*fv_uv = (int)aafv_fv;
+
+	return is_last;
+}
+
+/* AACC ------------------------------------------------------------------- */
+
+static void aacc_update_cycle_count(struct batt_drv *batt_drv)
+{
+	int cycle_count = batt_drv->cycle_count;
+
+	/* TODO: AACC is TBD */
+	batt_drv->aacc = cycle_count;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -4927,6 +5191,7 @@ static int msc_logic(struct batt_drv *batt_drv)
 			   "MSC_JEITA temp=%d ok, enabling charging\n",
 			   temp);
 		batt_drv->jeita_stop_charging = 0;
+		batt_drv->ce_data.max_charge_voltage = 0;
 	}
 
 	ibatt = GPSY_GET_INT_PROP(fg_psy, POWER_SUPPLY_PROP_CURRENT_NOW,
@@ -4937,6 +5202,9 @@ static int msc_logic(struct batt_drv *batt_drv)
 	vbatt = GPSY_GET_PROP(fg_psy, POWER_SUPPLY_PROP_VOLTAGE_NOW);
 	if (vbatt < 0)
 		return -EIO;
+
+	/* save the maximum battery voltage */
+	batt_drv->ce_data.max_charge_voltage = max(batt_drv->ce_data.max_charge_voltage, vbatt);
 
 	/*
 	 * Multi Step Charging with IRDROP compensation when vchrg is != 0
@@ -5179,12 +5447,10 @@ static int msc_logic(struct batt_drv *batt_drv)
 		batt_drv->cc_max_pullback = 0;
 	}
 
-	/* adjust last fv_uv */
+	/* adjust last fv_uv for AAFV */
 	if (vbatt_idx != batt_drv->vbatt_idx || temp_idx != batt_drv->temp_idx) {
-		const int last_vbatt_idx = gbms_msc_get_last_voltage_idx(profile, temp_idx);
-
-		if (vbatt_idx == last_vbatt_idx)
-			aafv_update_voltage(batt_drv, &fv_uv, last_vbatt_idx);
+		if (vbatt_idx == profile->volt_nb_limits - 1 && batt_drv->cc_max > 0)
+			aafv_update_float_voltage(batt_drv, &fv_uv);
 	}
 
 	batt_prlog(batt_prlog_level(changed),
@@ -5272,20 +5538,24 @@ static void google_battery_dump_profile(const struct gbms_chg_profile *profile)
 	}
 }
 
+/* requires mutex_lock(&batt_drv->aacp_state_lock); */
 static void aacr_update_chg_table(struct batt_drv *batt_drv)
 {
-	u32 capacity = aacr_get_capacity(batt_drv);
+	u32 capacity;
 
-	if (capacity != batt_drv->chg_profile.capacity_ma) {
-		gbms_logbuffer_devlog(batt_drv->ttf_stats.ttf_log, batt_drv->device,
-		LOGLEVEL_INFO, 0, LOGLEVEL_INFO, "AACR: capacity:%d->%d, state:%d, "
-		"algo:%d, cycle_grace:%d, cycle_max:%d, min_cap_rate:%d, cliff_cap_rate:%d",
-		batt_drv->chg_profile.capacity_ma, capacity, batt_drv->aacr_state,
-		batt_drv->aacr_algo, batt_drv->aacr_cycle_grace, batt_drv->aacr_cycle_max,
-		batt_drv->aacr_min_capacity_rate, batt_drv->aacr_cliff_capacity_rate);
-		gbms_init_chg_table(&batt_drv->chg_profile, batt_drv->device->of_node, capacity);
-		google_battery_dump_profile(&batt_drv->chg_profile);
-	}
+	capacity = aacr_get_capacity_locked(batt_drv);
+	if (capacity == batt_drv->chg_profile.capacity_ma)
+		return;
+
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+		"AACR: cc:%d, st:%d, oo=%d, capacity:%d->%d, algo:%d, grace:%d, cmax:%d, min_cr:%d, cliff_cr:%d",
+		aacp_get_cc(batt_drv), batt_drv->aacr_state, batt_drv->aacp_opt_out,
+		batt_drv->chg_profile.capacity_ma, capacity,
+		batt_drv->aacr_algo, batt_drv->aacr_cycle_grace,
+		batt_drv->aacr_cycle_max, batt_drv->aacr_min_capacity_rate,
+		batt_drv->aacr_cliff_capacity_rate);
+	gbms_init_chg_table(&batt_drv->chg_profile, batt_drv->device->of_node, capacity);
+	google_battery_dump_profile(&batt_drv->chg_profile);
 }
 
 /* cell fault: disconnect of one of the battery cells */
@@ -5366,7 +5636,7 @@ static int batt_bpst_reset(struct batt_bpst *bpst_state)
 static int batt_init_bpst_profile(struct batt_drv *batt_drv)
 {
 	struct batt_bpst *bpst_state = &batt_drv->bpst_state;
-	const struct device_node *node = batt_drv->device->of_node;
+	struct device_node *node = batt_drv->device->of_node;
 	int ret;
 
 	/* set cell_fault initial status */
@@ -5385,6 +5655,61 @@ static int batt_init_bpst_profile(struct batt_drv *batt_drv)
 
 	return 0;
 }
+
+/* AACT ------------------------------------------------------------------- */
+
+/* call holding mutex_lock(&batt_drv->aacp_state_lock); */
+static void aact_reset(struct gbms_chg_profile *profile)
+{
+	profile->aact_nb_limits = 0;
+	profile->aact_idx = 0;
+	profile->aact_cccm_limits = 0;
+}
+
+/* call holding mutex_lock(&batt_drv->aacp_state_lock); */
+static int aact_get_index(const struct batt_drv *batt_drv)
+{
+	const int cycle_count = aacp_get_cc(batt_drv);
+
+	return gbms_aact_get_index(&batt_drv->chg_profile, cycle_count);
+}
+
+/* call holding mutex_lock(&batt_drv->aacp_state_lock); */
+static int aact_update_chg_table(struct batt_drv *batt_drv)
+{
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	struct device_node *node = batt_drv->device->of_node;
+	const bool enabled = aact_enabled(batt_drv->aact_state, batt_drv->aacp_opt_out);
+	int ret;
+
+	if (!profile->aact_init_profile && enabled) {
+		/* init AACT charge table */
+		ret = gbms_init_aact_profile(profile, node);
+		if (ret < 0)
+			return ret;
+		ret = gbms_update_chg_profile_from_aact(profile);
+		if (ret < 0)
+			return ret;
+		gbms_init_chg_table(profile, node, batt_drv->battery_capacity);
+	} else if (profile->aact_init_profile && !enabled) {
+		/* reset AACT */
+		aact_reset(profile);
+
+		/* init default charge table */
+		ret = gbms_init_chg_profile(profile, node);
+		if (ret < 0)
+			return ret;
+
+		gbms_init_chg_table(profile, node, batt_drv->battery_capacity);
+	}
+
+	if (enabled)
+		profile->aact_idx = aact_get_index(batt_drv);
+
+	return 0;
+}
+
+/* ------------------------------------------------------------------------- */
 
 /* call holding mutex_lock(&batt_drv->chg_lock); */
 static int batt_chg_logic(struct batt_drv *batt_drv)
@@ -5436,6 +5761,9 @@ static int batt_chg_logic(struct batt_drv *batt_drv)
 		batt_update_cycle_count(batt_drv);
 		batt_rl_reset(batt_drv);
 
+		/* aacc: cycle count */
+		aacc_update_cycle_count(batt_drv);
+
 		/* charging_policy: vote AC false when disconnected */
 		gvotable_cast_long_vote(batt_drv->charging_policy_votable, "MSC_AC",
 					CHARGING_POLICY_VOTE_ADAPTIVE_AC, false);
@@ -5459,10 +5787,7 @@ static int batt_chg_logic(struct batt_drv *batt_drv)
 		goto msc_logic_done;
 	}
 
-	/*
-	 * here when connected to power supply
-	 * The following block one only on start.
-	 */
+	/* executed when going from disconnected to connected */
 	if (batt_drv->ssoc_state.buck_enabled <= 0) {
 		struct bhi_data *bhi_data = &batt_drv->health_data.bhi_data;
 		const qnum_t ssoc_delta = ssoc_get_delta(batt_drv);
@@ -5481,7 +5806,34 @@ static int batt_chg_logic(struct batt_drv *batt_drv)
 		if (bhi_data->res_state.estimate_filter)
 			batt_res_state_set(&bhi_data->res_state, true);
 
+		/* AgeAdjustedChargingProfiles */
+		mutex_lock(&batt_drv->aacp_state_lock);
+		aacp_update_opt_out_cutoff(batt_drv);
+
+		err = aact_update_chg_table(batt_drv);
+		if (err < 0) {
+			struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+			struct device_node *node = batt_drv->device->of_node;
+			int rc;
+
+			/* reset AACT */
+			aact_reset(profile);
+
+			/* set state to unknown and init default charge table */
+			batt_drv->aact_state = BATT_AACT_UNKNOWN;
+			rc = gbms_init_chg_profile(profile, node);
+			if (rc == 0) {
+				gbms_init_chg_table(profile, node,
+						    aacr_get_capacity_locked(batt_drv));
+			}
+
+			pr_err("Cannot update aact charge table (%d)\n", err);
+		}
+
+		aafv_update_offset(batt_drv);
 		aacr_update_chg_table(batt_drv);
+
+		mutex_unlock(&batt_drv->aacp_state_lock);
 
 		batt_chg_stats_start(batt_drv);
 
@@ -5531,6 +5883,7 @@ static int batt_chg_logic(struct batt_drv *batt_drv)
 		batt_drv->ssoc_state.bd_trickle_full = true;
 	}
 
+	/* will acquire mutex_lock(&batt_drv->aacp_state_lock); */
 	err = msc_logic(batt_drv);
 	if (err < 0) {
 		/* NOTE: google charger will poll again. */
@@ -5549,16 +5902,12 @@ static int batt_chg_logic(struct batt_drv *batt_drv)
 	 * charging is active
 	 */
 	changed |= msc_logic_health(batt_drv);
-	if (CHG_HEALTH_REST_IS_AON(&batt_drv->chg_health, ssoc)) {
+	if (CHG_HEALTH_REST_IS_AON(&batt_drv->chg_health, ssoc))
 		batt_drv->msc_state = MSC_HEALTH_ALWAYS_ON;
-		batt_drv->fv_uv = 0;
-	} else if (CHG_HEALTH_REST_IS_ACTIVE(&batt_drv->chg_health)) {
+	else if (CHG_HEALTH_REST_IS_ACTIVE(&batt_drv->chg_health))
 		batt_drv->msc_state = MSC_HEALTH;
-		/* make sure using rest_fv_uv when HEALTH_ACTIVE */
-		batt_drv->fv_uv = 0;
-	} else if (CHG_HEALTH_REST_IS_PAUSE(&batt_drv->chg_health)) {
+	else if (CHG_HEALTH_REST_IS_PAUSE(&batt_drv->chg_health))
 		batt_drv->msc_state = MSC_HEALTH_PAUSE;
-	}
 
 msc_logic_done:
 
@@ -5605,11 +5954,13 @@ msc_logic_done:
 		batt_drv->fv_votable =
 			gvotable_election_get_handle(VOTABLE_MSC_FV);
 	if (batt_drv->fv_votable) {
+		/* make sure using rest_fv_uv when HEALTH_ACTIVE */
 		const int rest_fv_uv = batt_drv->chg_health.rest_fv_uv;
+		const int fv_uv = rest_fv_uv > 0 ? 0 : batt_drv->fv_uv;
 
 		gvotable_cast_int_vote(batt_drv->fv_votable,
-				       MSC_LOGIC_VOTER, batt_drv->fv_uv,
-				       !disable_votes && (batt_drv->fv_uv > 0));
+				       MSC_LOGIC_VOTER, fv_uv,
+				       !disable_votes && (fv_uv > 0));
 
 		gvotable_cast_int_vote(batt_drv->fv_votable,
 				       MSC_HEALTH_VOTER, rest_fv_uv,
@@ -5685,12 +6036,14 @@ msc_logic_exit:
 	return err;
 }
 
-/* charge profile not in battery */
+/*
+ * called at boot and when switching profiles from debugfs().
+ * NOTE: aacr_get_capacity_locked() requires mutex_lock(&batt_drv->aacp_state_lock)
+ */
 static int batt_init_chg_profile(struct batt_drv *batt_drv, struct device_node *node)
 {
 	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
 	int ret = 0;
-	struct device_node *batt_id_node __free(device_node) = NULL;
 
 	/* handle retry */
 	if (!profile->cccm_limits) {
@@ -5699,10 +6052,8 @@ static int batt_init_chg_profile(struct batt_drv *batt_drv, struct device_node *
 			return -EINVAL;
 	}
 
-	batt_id_node = gbms_batt_id_node(node);
-
 	/* this is in mAh */
-	ret = of_property_read_u32(batt_id_node,
+	ret = of_property_read_u32(gbms_batt_id_node(node),
 				   "google,chg-battery-capacity",
 				    &batt_drv->battery_capacity);
 	/* google,chg-battery-capacity does not exist in the child_node */
@@ -5744,15 +6095,34 @@ static int batt_init_chg_profile(struct batt_drv *batt_drv, struct device_node *
 		}
 	}
 
-	/* TODO: dump the AACR table if supported */
-	ret = gbms_read_aacr_limits(profile, batt_id_node);
+	/*
+	 * TODO: b/403865140 move AACR init code to batt_init_aact_profile()
+	 * and call it from google_battery_init_work() after BRID is available.
+	 */
+
+	ret = gbms_read_aacr_limits(profile, gbms_batt_id_node(node));
 	if (ret == 0)
 		pr_info("AACR: supported\n");
 
-	/* aacr tables enable AACR by default UNLESS explicitly disabled */
-	ret = of_property_read_bool(node, "google,aacr-disable");
-	if (!ret && profile->aacr_nb_limits)
-		batt_drv->aacr_state = BATT_AACR_ENABLED;
+	/*
+	 * AACR tables (profile->aacr_nb_limits) in DT enable AACR classic by
+	 * default UNLESS the feature is disabled via "google,aacr-disable".
+	 *
+	 *   ret = of_property_read_bool(node, "google,aacr-disable");
+	 *   if (!ret && profile->aacr_nb_limits)
+	 * 	  batt_drv->aacr_state = BATT_AACR_ENABLED;
+	 *   else
+	 *	  batt_drv->aacr_state = BATT_AACR_DISABLED;
+	 *
+	 * With AACR+H the state depends from the configuration. Default state
+	 * on a valid configuration is enabled.
+	 */
+
+	ret = of_property_read_u32(node, "google,aacr-config",
+				   &batt_drv->aacr_state);
+	if (ret < 0)
+		batt_drv->aacr_state = profile->aacr_nb_limits ?
+			BATT_AACR_DISABLED : BATT_AACR_UNKNOWN;
 
 	ret = of_property_read_u32(node, "google,aacr-algo", &batt_drv->aacr_algo);
 	if (ret < 0)
@@ -5768,8 +6138,16 @@ static int batt_init_chg_profile(struct batt_drv *batt_drv, struct device_node *
 	if (ret < 0)
 		batt_drv->aacr_cliff_capacity_rate = 50; /* default rate */
 
+	ret = of_property_read_u32(node, "google,aacr-cycle-max", &batt_drv->aacr_cycle_max);
+	if (ret < 0)
+		batt_drv->aacr_cycle_max = AACR_MAX_CYCLE_DEFAULT; /* default rate */
+
+	ret = of_property_read_u32(node, "google,aacr-cycle-grace", &batt_drv->aacr_cycle_grace);
+	if (ret < 0)
+		batt_drv->aacr_cycle_grace = AACR_START_CYCLE_DEFAULT; /* default rate */
+
 	/* NOTE: with NG charger tolerance is applied from "charger" */
-	gbms_init_chg_table(profile, node, aacr_get_capacity(batt_drv));
+	gbms_init_chg_table(profile, node, aacr_get_capacity_locked(batt_drv));
 
 	return 0;
 }
@@ -5839,8 +6217,6 @@ static void batt_cycle_count_update(struct batt_drv *batt_drv, int soc)
 
 /* ------------------------------------------------------------------------- */
 
-#ifdef CONFIG_DEBUG_FS
-
 static ssize_t cycle_counts_store(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buf, size_t count)
@@ -5881,11 +6257,9 @@ static ssize_t cycle_counts_show(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR_RW(cycle_counts);
+static DEVICE_ATTR_RW(cycle_counts);
 
-static ssize_t resistance_show(struct device *dev,
-				   struct device_attribute *attr,
-				   char *buff)
+static ssize_t resistance_show(struct device *dev, struct device_attribute *attr, char *buff)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -5897,7 +6271,7 @@ static ssize_t resistance_show(struct device *dev,
 	return scnprintf(buff, PAGE_SIZE, "%d\n", value);
 }
 
-static const DEVICE_ATTR_RO(resistance);
+static DEVICE_ATTR_RO(resistance);
 
 static ssize_t resistance_avg_show(struct device *dev,
 				   struct device_attribute *attr,
@@ -5911,11 +6285,10 @@ static ssize_t resistance_avg_show(struct device *dev,
 			 batt_ravg_value(&batt_drv->health_data.bhi_data.res_state));
 }
 
-static const DEVICE_ATTR_RO(resistance_avg);
+static DEVICE_ATTR_RO(resistance_avg);
 
-static ssize_t charge_full_estimate_show(struct device *dev,
-				   struct device_attribute *attr,
-				   char *buff)
+static ssize_t charge_full_estimate_show(struct device *dev, struct device_attribute *attr,
+					 char *buff)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -5927,8 +6300,9 @@ static ssize_t charge_full_estimate_show(struct device *dev,
 	return scnprintf(buff, PAGE_SIZE, "%d\n", value);
 }
 
-static const DEVICE_ATTR_RO(charge_full_estimate);
+static DEVICE_ATTR_RO(charge_full_estimate);
 
+#ifdef CONFIG_DEBUG_FS
 
 static int cycle_count_bins_store(void *data, u64 val)
 {
@@ -6256,13 +6630,25 @@ static ssize_t debug_get_chg_raw_profile(struct file *filp,
 	if (!tmp)
 		return -ENOMEM;
 
+	mutex_lock(&batt_drv->aacp_state_lock);
 	if (raw_profile_cycles) {
 		struct gbms_chg_profile profile;
 		int count;
+		const bool enabled = aact_enabled(batt_drv->aact_state, batt_drv->aacp_opt_out);
 
 		len = gbms_init_chg_profile(&profile, batt_drv->device->of_node);
 		if (len < 0)
 			goto exit_done;
+
+		if (enabled) {
+			len = gbms_init_aact_profile(&profile, batt_drv->device->of_node);
+			if (len < 0)
+				goto exit_done;
+			len = gbms_update_chg_profile_from_aact(&profile);
+			if (len < 0)
+				goto exit_done;
+			profile.aact_idx = aact_get_index(batt_drv);
+		}
 
 		/* len is the capacity */
 		len = aacr_get_capacity_at_cycle(batt_drv, raw_profile_cycles);
@@ -6283,6 +6669,7 @@ static ssize_t debug_get_chg_raw_profile(struct file *filp,
 	len = simple_read_from_buffer(buf, count, ppos, tmp, strlen(tmp));
 
 exit_done:
+	mutex_unlock(&batt_drv->aacp_state_lock);
 	kfree(tmp);
 	return len;
 }
@@ -6604,7 +6991,7 @@ static ssize_t chg_profile_switch_store(struct device *dev,
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *) power_supply_get_drvdata(psy);
-	struct device_node *node __free(device_node) = NULL;
+	struct device_node *node;
 	int val, ret;
 
 	if (!batt_drv->chg_profile.enable_switch_chg_profile)
@@ -6617,13 +7004,6 @@ static ssize_t chg_profile_switch_store(struct device *dev,
 	if (batt_drv->chg_profile.debug_chg_profile == !!val)
 		return count;
 
-	/*
-	 * This serves two objectives:
-	 * - balance of_node_put() in of_find_node_by_name()
-	 * - ensure 'node' (batt_drv->device->of_node) stays valid in the
-	 *   alternative path
-	 */
-	of_node_get(batt_drv->device->of_node);
 	if (val)
 		node = of_find_node_by_name(batt_drv->device->of_node,
 					    "google_debug_chg_profile");
@@ -6646,13 +7026,11 @@ static ssize_t chg_profile_switch_store(struct device *dev,
 	return count;
 }
 
-static const DEVICE_ATTR_RW(chg_profile_switch);
+static DEVICE_ATTR_RW(chg_profile_switch);
 
 
 /* TODO: add writes to restart pairing (i.e. provide key) */
-static ssize_t batt_pairing_state_show(struct device *dev,
-				       struct device_attribute *attr,
-				       char *buf)
+static ssize_t pairing_state_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -6664,10 +7042,9 @@ static ssize_t batt_pairing_state_show(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR(pairing_state, 0444, batt_pairing_state_show, NULL);
+static DEVICE_ATTR_RO(pairing_state);
 
-
-static ssize_t batt_ctl_chg_stats_actual(struct device *dev,
+static ssize_t charge_stats_actual_store(struct device *dev,
 					 struct device_attribute *attr,
 					 const char *buf, size_t count)
 {
@@ -6691,8 +7068,8 @@ static ssize_t batt_ctl_chg_stats_actual(struct device *dev,
 	return count;
 }
 
-static ssize_t batt_show_chg_stats_actual(struct device *dev,
-				   struct device_attribute *attr, char *buf)
+static ssize_t charge_stats_actual_show(struct device *dev, struct device_attribute *attr,
+					char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -6707,11 +7084,9 @@ static ssize_t batt_show_chg_stats_actual(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR(charge_stats_actual, 0664,
-					     batt_show_chg_stats_actual,
-					     batt_ctl_chg_stats_actual);
+static DEVICE_ATTR_RW(charge_stats_actual);
 
-static ssize_t batt_ctl_chg_stats(struct device *dev,
+static ssize_t charge_stats_store(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buf, size_t count)
 {
@@ -6748,8 +7123,7 @@ static ssize_t batt_chg_qual_stats_cstr(char *buff, int size,
 	return len;
 }
 
-static ssize_t batt_show_chg_stats(struct device *dev,
-				   struct device_attribute *attr, char *buf)
+static ssize_t charge_stats_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -6766,12 +7140,11 @@ static ssize_t batt_show_chg_stats(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR(charge_stats, 0664, batt_show_chg_stats,
-					     batt_ctl_chg_stats);
+static DEVICE_ATTR_RW(charge_stats);
 
 /* show current/active and qual data */
-static ssize_t batt_show_chg_details(struct device *dev,
-				     struct device_attribute *attr, char *buf)
+static ssize_t charge_details_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -6831,12 +7204,10 @@ static ssize_t batt_show_chg_details(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR(charge_details, 0444, batt_show_chg_details,
-					       NULL);
+static DEVICE_ATTR_RO(charge_details);
 
 /* tier and soc details */
-static ssize_t batt_show_ttf_details(struct device *dev,
-				     struct device_attribute *attr, char *buf)
+static ssize_t ttf_details_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = (struct batt_drv *)
@@ -6864,11 +7235,10 @@ static ssize_t batt_show_ttf_details(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR(ttf_details, 0444, batt_show_ttf_details, NULL);
+static DEVICE_ATTR_RO(ttf_details);
 
 /* house stats */
-static ssize_t batt_show_ttf_stats(struct device *dev,
-				   struct device_attribute *attr, char *buf)
+static ssize_t ttf_stats_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -6895,9 +7265,9 @@ static ssize_t batt_show_ttf_stats(struct device *dev,
 }
 
 /* userspace restore the TTF data with this */
-static ssize_t batt_ctl_ttf_stats(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t count)
+static ssize_t ttf_stats_store(struct device *dev,
+			       struct device_attribute *attr,
+			       const char *buf, size_t count)
 {
 	int res;
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
@@ -6928,13 +7298,11 @@ static ssize_t batt_ctl_ttf_stats(struct device *dev,
 	return count;
 }
 
-static const DEVICE_ATTR(ttf_stats, 0664, batt_show_ttf_stats,
-					  batt_ctl_ttf_stats);
+static DEVICE_ATTR_RW(ttf_stats);
 
 /* ------------------------------------------------------------------------- */
 
-static ssize_t chg_health_show_stage(struct device *dev,
-				     struct device_attribute *attr, char *buf)
+static ssize_t charge_stage_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = (struct batt_drv *)
@@ -6964,11 +7332,9 @@ static ssize_t chg_health_show_stage(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%s\n", s);
 }
 
-static const DEVICE_ATTR(charge_stage, 0444, chg_health_show_stage, NULL);
+static DEVICE_ATTR_RO(charge_stage);
 
-static ssize_t chg_health_charge_limit_get(struct device *dev,
-					   struct device_attribute *attr,
-					   char *buf)
+static ssize_t charge_limit_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -7025,9 +7391,9 @@ static void batt_set_health_charge_limit(struct batt_drv *batt_drv,
 	mutex_unlock(&batt_drv->chg_lock);
 }
 
-static ssize_t chg_health_charge_limit_set(struct device *dev,
-					   struct device_attribute *attr,
-					   const char *buf, size_t count)
+static ssize_t charge_limit_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -7043,8 +7409,7 @@ static ssize_t chg_health_charge_limit_set(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(charge_limit, 0660, chg_health_charge_limit_get,
-		   chg_health_charge_limit_set);
+static DEVICE_ATTR_RW(charge_limit);
 
 static void batt_init_chg_health(struct batt_drv *batt_drv)
 {
@@ -7070,7 +7435,7 @@ static void batt_init_chg_health(struct batt_drv *batt_drv)
 
 	batt_set_health_charge_limit(batt_drv, -1);
 
-	gbms_logbuffer_prlog(batt_drv->ttf_stats.ttf_log, LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
 			     "MSC_HEALTH: %s: rest_soc=%d, aon_soc=%d, rest_rate/before=%d/%d",
 			     __func__, batt_drv->chg_health.rest_soc,
 			     batt_drv->chg_health.always_on_soc,
@@ -7078,8 +7443,7 @@ static void batt_init_chg_health(struct batt_drv *batt_drv)
 			     batt_drv->chg_health.rest_rate_before_trigger);
 }
 
-static ssize_t batt_show_chg_deadline(struct device *dev,
-				      struct device_attribute *attr, char *buf)
+static ssize_t charge_deadline_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -7129,13 +7493,14 @@ static ssize_t batt_show_chg_deadline(struct device *dev,
 }
 
 /* userspace restore the TTF data with this */
-static ssize_t batt_set_chg_deadline(struct device *dev,
+static ssize_t charge_deadline_store(struct device *dev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
 					power_supply_get_drvdata(psy);
+	ktime_t ttf_with_margin = 0;
 	long long deadline_s;
 	bool changed;
 
@@ -7149,7 +7514,12 @@ static ssize_t batt_set_chg_deadline(struct device *dev,
 		return -EINVAL;
 	}
 
-	changed = batt_health_set_chg_deadline(&batt_drv->chg_health,
+	if (batt_ttf_estimate(&ttf_with_margin, batt_drv) < 0)
+		ttf_with_margin = LLONG_MAX;
+	else if (batt_drv->health_safety_margin > 0)
+		ttf_with_margin += batt_drv->health_safety_margin;
+
+	changed = batt_health_set_chg_deadline(&batt_drv->chg_health, (long long)ttf_with_margin,
 					       deadline_s);
 	mutex_unlock(&batt_drv->chg_lock);
 
@@ -7162,15 +7532,14 @@ static ssize_t batt_set_chg_deadline(struct device *dev,
 		power_supply_changed(batt_drv->psy);
 	}
 
-	gbms_logbuffer_prlog(batt_drv->ttf_stats.ttf_log, LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
 			     "MSC_HEALTH: deadline_s=%lld deadline at %lld",
 			     deadline_s, batt_drv->chg_health.rest_deadline);
 
 	return count;
 }
 
-static const DEVICE_ATTR(charge_deadline, 0664, batt_show_chg_deadline,
-						batt_set_chg_deadline);
+static DEVICE_ATTR_RW(charge_deadline);
 
 static ssize_t charge_deadline_dryrun_store(struct device *dev,
 					    struct device_attribute *attr,
@@ -7244,9 +7613,9 @@ static ssize_t ssoc_details_show(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR_RO(ssoc_details);
+static DEVICE_ATTR_RO(ssoc_details);
 
-static ssize_t show_bd_trickle_enable(struct device *dev,
+static ssize_t bd_trickle_enable_show(struct device *dev,
 				      struct device_attribute *attr,
 				      char *buf)
 {
@@ -7257,9 +7626,9 @@ static ssize_t show_bd_trickle_enable(struct device *dev,
 			 batt_drv->ssoc_state.bd_trickle_enable);
 }
 
-static ssize_t set_bd_trickle_enable(struct device *dev,
-				     struct device_attribute *attr,
-				     const char *buf, size_t count)
+static ssize_t bd_trickle_enable_store(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7274,11 +7643,9 @@ static ssize_t set_bd_trickle_enable(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(bd_trickle_enable, 0660,
-		   show_bd_trickle_enable, set_bd_trickle_enable);
+static DEVICE_ATTR_RW(bd_trickle_enable);
 
-static ssize_t show_bd_trickle_cnt(struct device *dev,
-				   struct device_attribute *attr, char *buf)
+static ssize_t bd_trickle_cnt_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7287,9 +7654,9 @@ static ssize_t show_bd_trickle_cnt(struct device *dev,
 			 batt_drv->ssoc_state.bd_trickle_cnt);
 }
 
-static ssize_t set_bd_trickle_cnt(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t count)
+static ssize_t bd_trickle_cnt_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7304,10 +7671,9 @@ static ssize_t set_bd_trickle_cnt(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(bd_trickle_cnt, 0660,
-		   show_bd_trickle_cnt, set_bd_trickle_cnt);
+static DEVICE_ATTR_RW(bd_trickle_cnt);
 
-static ssize_t show_bd_trickle_recharge_soc(struct device *dev,
+static ssize_t bd_trickle_recharge_soc_show(struct device *dev,
 					    struct device_attribute *attr,
 					    char *buf)
 {
@@ -7320,9 +7686,9 @@ static ssize_t show_bd_trickle_recharge_soc(struct device *dev,
 
 #define BD_RL_SOC_FULL		100
 #define BD_RL_SOC_LOW		50
-static ssize_t set_bd_trickle_recharge_soc(struct device *dev,
-					   struct device_attribute *attr,
-					   const char *buf, size_t count)
+static ssize_t bd_trickle_recharge_soc_store(struct device *dev,
+					     struct device_attribute *attr,
+					     const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7340,10 +7706,9 @@ static ssize_t set_bd_trickle_recharge_soc(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(bd_trickle_recharge_soc, 0660,
-		   show_bd_trickle_recharge_soc, set_bd_trickle_recharge_soc);
+static DEVICE_ATTR_RW(bd_trickle_recharge_soc);
 
-static ssize_t show_bd_trickle_dry_run(struct device *dev,
+static ssize_t bd_trickle_dry_run_show(struct device *dev,
 				       struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
@@ -7353,9 +7718,9 @@ static ssize_t show_bd_trickle_dry_run(struct device *dev,
 			 batt_drv->ssoc_state.bd_trickle_dry_run);
 }
 
-static ssize_t set_bd_trickle_dry_run(struct device *dev,
-				      struct device_attribute *attr,
-				      const char *buf, size_t count)
+static ssize_t bd_trickle_dry_run_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7370,10 +7735,9 @@ static ssize_t set_bd_trickle_dry_run(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(bd_trickle_dry_run, 0660,
-		   show_bd_trickle_dry_run, set_bd_trickle_dry_run);
+static DEVICE_ATTR_RW(bd_trickle_dry_run);
 
-static ssize_t show_bd_trickle_reset_sec(struct device *dev,
+static ssize_t bd_trickle_reset_sec_show(struct device *dev,
 					 struct device_attribute *attr,
 					 char *buf)
 {
@@ -7384,9 +7748,9 @@ static ssize_t show_bd_trickle_reset_sec(struct device *dev,
 			 batt_drv->ssoc_state.bd_trickle_reset_sec);
 }
 
-static ssize_t set_bd_trickle_reset_sec(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf, size_t count)
+static ssize_t bd_trickle_reset_sec_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7402,8 +7766,7 @@ static ssize_t set_bd_trickle_reset_sec(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(bd_trickle_reset_sec, 0660,
-		   show_bd_trickle_reset_sec, set_bd_trickle_reset_sec);
+static DEVICE_ATTR_RW(bd_trickle_reset_sec);
 
 static ssize_t bd_clear_store(struct device *dev,
 			      struct device_attribute *attr,
@@ -7425,7 +7788,7 @@ static ssize_t bd_clear_store(struct device *dev,
 
 static DEVICE_ATTR_WO(bd_clear);
 
-static ssize_t batt_show_time_to_ac(struct device *dev,
+static ssize_t time_to_ac_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
@@ -7449,10 +7812,9 @@ static ssize_t batt_show_time_to_ac(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%lld\n", (long long)estimate);
 }
 
-static const DEVICE_ATTR(time_to_ac, 0444, batt_show_time_to_ac, NULL);
+static DEVICE_ATTR_RO(time_to_ac);
 
-static ssize_t batt_show_ac_soc(struct device *dev,
-				    struct device_attribute *attr, char *buf)
+static ssize_t ac_soc_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv =(struct batt_drv *)
@@ -7462,7 +7824,7 @@ static ssize_t batt_show_ac_soc(struct device *dev,
 			 CHG_HEALTH_REST_SOC(&batt_drv->chg_health));
 }
 
-static const DEVICE_ATTR(ac_soc, 0444, batt_show_ac_soc, NULL);
+static DEVICE_ATTR_RO(ac_soc);
 
 static ssize_t charge_to_limit_store(struct device *dev,
 				     struct device_attribute *attr,
@@ -7520,10 +7882,9 @@ static ssize_t charge_to_limit_show(struct device *dev,
 	return sysfs_emit(buf, "%d\n", result);
 }
 
-static const DEVICE_ATTR_RW(charge_to_limit);
+static DEVICE_ATTR_RW(charge_to_limit);
 
-static ssize_t batt_show_charger_state(struct device *dev,
-				       struct device_attribute *attr, char *buf)
+static ssize_t charger_state_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7531,11 +7892,10 @@ static ssize_t batt_show_charger_state(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "0x%llx\n", batt_drv->chg_state.v);
 }
 
-static const DEVICE_ATTR(charger_state, 0444, batt_show_charger_state, NULL);
+static DEVICE_ATTR_RO(charger_state);
 
 
-static ssize_t batt_show_charge_type(struct device *dev,
-				       struct device_attribute *attr, char *buf)
+static ssize_t charge_type_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7543,11 +7903,10 @@ static ssize_t batt_show_charge_type(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->chg_state.f.chg_type);
 }
 
-static const DEVICE_ATTR(charge_type, 0444, batt_show_charge_type, NULL);
+static DEVICE_ATTR_RO(charge_type);
 
-
-static ssize_t batt_show_constant_charge_current(struct device *dev,
-				       struct device_attribute *attr, char *buf)
+static ssize_t constant_charge_current_show(struct device *dev,
+					    struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7555,12 +7914,11 @@ static ssize_t batt_show_constant_charge_current(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->cc_max);
 }
 
-static const DEVICE_ATTR(constant_charge_current, 0444,
-			 batt_show_constant_charge_current, NULL);
+static DEVICE_ATTR_RO(constant_charge_current);
 
 
-static ssize_t batt_show_constant_charge_voltage(struct device *dev,
-				       struct device_attribute *attr, char *buf)
+static ssize_t constant_charge_voltage_show(struct device *dev,
+					    struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7568,11 +7926,10 @@ static ssize_t batt_show_constant_charge_voltage(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->fv_uv);
 }
 
-static const DEVICE_ATTR(constant_charge_voltage, 0444,
-			 batt_show_constant_charge_voltage, NULL);
+static DEVICE_ATTR_RO(constant_charge_voltage);
 
-static ssize_t show_health_safety_margin(struct device *dev,
-				   struct device_attribute *attr, char *buf)
+static ssize_t health_safety_margin_show(struct device *dev,
+					 struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7581,9 +7938,9 @@ static ssize_t show_health_safety_margin(struct device *dev,
 			 batt_drv->health_safety_margin);
 }
 
-static ssize_t set_health_safety_margin(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t count)
+static ssize_t health_safety_margin_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7605,8 +7962,7 @@ static ssize_t set_health_safety_margin(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(health_safety_margin, 0660,
-		    show_health_safety_margin, set_health_safety_margin);
+static DEVICE_ATTR_RW(health_safety_margin);
 
 /* BPST ------------------------------------------------------------------- */
 
@@ -7675,60 +8031,97 @@ static ssize_t aacr_state_store(struct device *dev,
 			       const char *buf, size_t count) {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
-	int val, state, algo, ret = 0;
+	enum batt_aacr_state state = batt_drv->aacr_state;
+	int val, algo, ret = 0;
 
 	ret = kstrtoint(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 
-	if (val < BATT_AACR_DISABLED) /* not allow minus value */
+	if (val < BATT_AACR_UNKNOWN)
 		return -ERANGE;
 
+	mutex_lock(&batt_drv->aacp_state_lock);
+
 	switch (val) {
+	case BATT_AACR_UNKNOWN:
+		state = BATT_AACR_UNKNOWN;
+		break;
 	case BATT_AACR_DISABLED:
 		state = BATT_AACR_DISABLED;
-		algo = BATT_AACR_DISABLED;
 		break;
+	/* configuration needs to be valid */
 	case BATT_AACR_ENABLED:
 		state = BATT_AACR_ENABLED;
 		algo = BATT_AACR_ALGO_DEFAULT;
 		break;
+
+	/* change of algo and state if unknown */
 	case BATT_AACR_ALGO_LOW_B:
-		state = BATT_AACR_ENABLED;
 		algo = BATT_AACR_ALGO_LOW_B;
+		if (batt_drv->aacr_state == BATT_AACR_UNKNOWN)
+			state = BATT_AACR_DISABLED;
+		break;
+	case BATT_AACR_ALGO_UP_B:
+		algo = BATT_AACR_ALGO_UP_B;
+		if (batt_drv->aacr_state == BATT_AACR_UNKNOWN)
+			state = BATT_AACR_DISABLED;
 		break;
 	case BATT_AACR_ALGO_REFERENCE_CAP:
-		state = BATT_AACR_ENABLED;
 		algo = BATT_AACR_ALGO_REFERENCE_CAP;
+		if (batt_drv->aacr_state == BATT_AACR_UNKNOWN)
+			state = BATT_AACR_DISABLED;
 		break;
 	default:
 		return -ERANGE;
 	}
 
-	if (batt_drv->aacr_state == state && batt_drv->aacr_algo == algo)
+	if (batt_drv->aacr_state == state && batt_drv->aacr_algo == algo) {
+		mutex_unlock(&batt_drv->aacp_state_lock);
 		return count;
+	}
 
 	pr_info("aacr_state: %d -> %d, aacr_algo: %d -> %d\n",
 		batt_drv->aacr_state, state, batt_drv->aacr_algo, algo);
+
 	batt_drv->aacr_state = state;
 	batt_drv->aacr_algo = algo;
 
 	aacr_update_chg_table(batt_drv);
+	mutex_unlock(&batt_drv->aacp_state_lock);
 
 	return count;
 }
 
-static ssize_t aacr_state_show(struct device *dev,
-			      struct device_attribute *attr, char *buf)
+static ssize_t aacr_state_show(struct device *dev,  struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
 
-	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacr_state);
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+		aact_enabled(batt_drv->aacr_state, batt_drv->aacp_opt_out));
 }
 
-static const DEVICE_ATTR_RW(aacr_state);
+static DEVICE_ATTR_RW(aacr_state);
 
+static ssize_t aacr_config_show(struct device *dev,  struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct device_node *node = batt_drv->device->of_node;
+	u32 aaxx_config;
+	int ret;
+
+	ret = of_property_read_u32(node, "google,aacr-config",  &aaxx_config);
+	if (ret < 0)
+		aaxx_config = batt_drv->chg_profile.aacr_nb_limits ?
+			BATT_AACR_DISABLED : BATT_AACR_UNKNOWN;;
+
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", aaxx_config);
+}
+
+static DEVICE_ATTR_RO(aacr_config);
 
 static ssize_t aacr_cycle_grace_store(struct device *dev,
 				      struct device_attribute *attr,
@@ -7745,12 +8138,14 @@ static ssize_t aacr_cycle_grace_store(struct device *dev,
 	if (value < 0)
 		return -ERANGE;
 
+	mutex_lock(&batt_drv->aacp_state_lock);
 	batt_drv->aacr_cycle_grace = value;
+	mutex_unlock(&batt_drv->aacp_state_lock);
+
 	return count;
 }
 
-static ssize_t aacr_cycle_grace_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
+static ssize_t aacr_cycle_grace_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7758,8 +8153,7 @@ static ssize_t aacr_cycle_grace_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacr_cycle_grace);
 }
 
-static const DEVICE_ATTR_RW(aacr_cycle_grace);
-
+static DEVICE_ATTR_RW(aacr_cycle_grace);
 
 static ssize_t aacr_cycle_max_store(struct device *dev,
 				    struct device_attribute *attr,
@@ -7776,12 +8170,14 @@ static ssize_t aacr_cycle_max_store(struct device *dev,
 	if (value < 0 || value > 3000) /* unexpected cycles */
 		return -ERANGE;
 
+	mutex_lock(&batt_drv->aacp_state_lock);
 	batt_drv->aacr_cycle_max = value;
+	mutex_unlock(&batt_drv->aacp_state_lock);
+
 	return count;
 }
 
-static ssize_t aacr_cycle_max_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
+static ssize_t aacr_cycle_max_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7789,10 +8185,9 @@ static ssize_t aacr_cycle_max_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacr_cycle_max);
 }
 
-static const DEVICE_ATTR_RW(aacr_cycle_max);
+static DEVICE_ATTR_RW(aacr_cycle_max);
 
-static ssize_t aacr_algo_show(struct device *dev,
-			      struct device_attribute *attr, char *buf)
+static ssize_t aacr_algo_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7800,11 +8195,11 @@ static ssize_t aacr_algo_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacr_algo);
 }
 
-static const DEVICE_ATTR_RO(aacr_algo);
+static DEVICE_ATTR_RO(aacr_algo);
 
 static ssize_t aacr_min_capacity_rate_store(struct device *dev,
-				       struct device_attribute *attr,
-				       const char *buf, size_t count)
+					    struct device_attribute *attr,
+					    const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7814,12 +8209,15 @@ static ssize_t aacr_min_capacity_rate_store(struct device *dev,
 	if (ret < 0 || rate > 100 || rate <= 0)
 		return ret;
 
+	mutex_lock(&batt_drv->aacp_state_lock);
 	batt_drv->aacr_min_capacity_rate = rate;
+	mutex_unlock(&batt_drv->aacp_state_lock);
+
 	return count;
 }
 
 static ssize_t aacr_min_capacity_rate_show(struct device *dev,
-				      struct device_attribute *attr, char *buf)
+					   struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7827,11 +8225,11 @@ static ssize_t aacr_min_capacity_rate_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacr_min_capacity_rate);
 }
 
-static const DEVICE_ATTR_RW(aacr_min_capacity_rate);
+static DEVICE_ATTR_RW(aacr_min_capacity_rate);
 
 static ssize_t aacr_cliff_capacity_rate_store(struct device *dev,
-				       struct device_attribute *attr,
-				       const char *buf, size_t count)
+					      struct device_attribute *attr,
+					      const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7844,12 +8242,15 @@ static ssize_t aacr_cliff_capacity_rate_store(struct device *dev,
 	if(rate > 100 || rate <= 0)
 		return -ERANGE;
 
+	mutex_lock(&batt_drv->aacp_state_lock);
 	batt_drv->aacr_cliff_capacity_rate = rate;
+	mutex_unlock(&batt_drv->aacp_state_lock);
+
 	return count;
 }
 
 static ssize_t aacr_cliff_capacity_rate_show(struct device *dev,
-				      struct device_attribute *attr, char *buf)
+					     struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -7857,7 +8258,73 @@ static ssize_t aacr_cliff_capacity_rate_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacr_cliff_capacity_rate);
 }
 
-static const DEVICE_ATTR_RW(aacr_cliff_capacity_rate);
+static DEVICE_ATTR_RW(aacr_cliff_capacity_rate);
+
+static ssize_t aacr_profile_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	u32 cc[GBMS_AACR_DATA_MAX] = { 0 };
+	u32 fd[GBMS_AACR_DATA_MAX] = { 0 };
+	int cnt = 0, batt_id;
+
+	cnt = sscanf(buf, "%d,%u:%u,%u:%u,%u:%u,%u:%u,%u:%u,%u:%u,%u:%u,%u:%u,%u:%u,%u:%u",
+		     &batt_id, &cc[0], &fd[0], &cc[1], &fd[1], &cc[2], &fd[2], &cc[3], &fd[3],
+		     &cc[4], &fd[4], &cc[5], &fd[5], &cc[6], &fd[6], &cc[7], &fd[7],
+		     &cc[8], &fd[8], &cc[9], &fd[9]);
+
+	/* The number entered must be an odd number (include batt_id) */
+	if (cnt % 2 == 0 || cnt < 3)
+		return -ERANGE;
+
+	/* validity check */
+	for (cnt = 0; cnt < GBMS_AACR_DATA_MAX - 1; cnt++) {
+		if (cc[cnt + 1] == 0)
+			break;
+
+		if (cc[cnt] > cc[cnt + 1] || fd[cnt] > fd[cnt + 1])
+			return -ERANGE;
+	}
+
+	/* 0 means force setting the profile */
+	if (batt_id == batt_drv->batt_id || batt_id == 0) {
+		mutex_lock(&batt_drv->aacp_state_lock);
+		memcpy(&profile->aacr_reference_cycles, cc, sizeof(cc));
+		memcpy(&profile->aacr_reference_fade10, fd, sizeof(fd));
+		profile->aacr_nb_limits = (u32)(cnt + 1);
+		mutex_unlock(&batt_drv->aacp_state_lock);
+	}
+
+	return count;
+}
+
+static ssize_t aacr_profile_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	ssize_t cnt = 0;
+	int i;
+
+	if (profile->aacr_nb_limits == 0)
+		return cnt;
+
+	cnt += sysfs_emit_at(buf, cnt, "%d", batt_drv->batt_id);
+
+	for (i = 0; i < profile->aacr_nb_limits; i++)
+		cnt += sysfs_emit_at(buf, cnt, ",%u:%u",
+				     profile->aacr_reference_cycles[i],
+				     profile->aacr_reference_fade10[i]);
+
+	cnt += sysfs_emit_at(buf, cnt, "\n");
+
+	return cnt;
+}
+
+static DEVICE_ATTR_RW(aacr_profile);
 
 /* AAFV ------------------------------------------------------------------- */
 
@@ -7872,20 +8339,19 @@ static ssize_t aafv_state_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	mutex_lock(&batt_drv->aafv_state_lock);
+	mutex_lock(&batt_drv->aacp_state_lock);
+
+	dev_info(batt_drv->device, "AAFV: aafv_state: %d -> %d\n", batt_drv->aafv_state, val);
 
 	if (batt_drv->aafv_state == val)
 		goto done;
 
-	if (val == BATT_AAFV_ENABLED && batt_drv->aafv_state != BATT_AAFV_DISABLED) {
-		mutex_unlock(&batt_drv->aafv_state_lock);
-		return -EINVAL;
-	}
-
-	dev_info(batt_drv->device, "AAFV: aafv_state: %d -> %d\n", batt_drv->aafv_state, val);
 	batt_drv->aafv_state = val;
+	/* the offset is applied immediately */
+	aafv_update_offset(batt_drv);
+
 done:
-	mutex_unlock(&batt_drv->aafv_state_lock);
+	mutex_unlock(&batt_drv->aacp_state_lock);
 
 	return count;
 }
@@ -7896,10 +8362,32 @@ static ssize_t aafv_state_show(struct device *dev,
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
 
-	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aafv_state);
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+		aafv_enabled(batt_drv->aafv_state, batt_drv->aacp_opt_out));
 }
 
-static const DEVICE_ATTR_RW(aafv_state);
+static DEVICE_ATTR_RW(aafv_state);
+
+static ssize_t aafv_config_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct device_node *node = batt_drv->device->of_node;
+	u32 aaxx_config;
+	int ret;
+
+	/* NOTE: see batt_init_aafv_profile */
+	ret = of_property_read_u32(node, "google,aafv-config",  &aaxx_config);
+	if (ret < 0)
+		aaxx_config = batt_drv->chg_profile.aafv_nb_limits ?
+			BATT_AAFV_DISABLED : BATT_AAFV_UNKNOWN;;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", aaxx_config);
+}
+
+static DEVICE_ATTR_RO(aafv_config);
+
 
 static ssize_t aafv_apply_max_store(struct device *dev,
 				     struct device_attribute *attr,
@@ -7913,10 +8401,10 @@ static ssize_t aafv_apply_max_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	mutex_lock(&batt_drv->aafv_state_lock);
+	mutex_lock(&batt_drv->aacp_state_lock);
 	if (value >= 0)
 		batt_drv->aafv_apply_max = value;
-	mutex_unlock(&batt_drv->aafv_state_lock);
+	mutex_unlock(&batt_drv->aacp_state_lock);
 
 	return count;
 }
@@ -7930,7 +8418,7 @@ static ssize_t aafv_apply_max_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aafv_apply_max);
 }
 
-static const DEVICE_ATTR_RW(aafv_apply_max);
+static DEVICE_ATTR_RW(aafv_apply_max);
 
 static ssize_t aafv_max_offset_store(struct device *dev,
 				     struct device_attribute *attr,
@@ -7944,10 +8432,10 @@ static ssize_t aafv_max_offset_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	mutex_lock(&batt_drv->aafv_state_lock);
+	mutex_lock(&batt_drv->aacp_state_lock);
 	if (value >= 0)
 		batt_drv->aafv_max_offset = value;
-	mutex_unlock(&batt_drv->aafv_state_lock);
+	mutex_unlock(&batt_drv->aacp_state_lock);
 
 	return count;
 }
@@ -7961,7 +8449,7 @@ static ssize_t aafv_max_offset_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aafv_max_offset);
 }
 
-static const DEVICE_ATTR_RW(aafv_max_offset);
+static DEVICE_ATTR_RW(aafv_max_offset);
 
 static ssize_t aafv_cliff_cycle_store(struct device *dev,
 				      struct device_attribute *attr,
@@ -7975,10 +8463,10 @@ static ssize_t aafv_cliff_cycle_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	mutex_lock(&batt_drv->aafv_state_lock);
+	mutex_lock(&batt_drv->aacp_state_lock);
 	if (value >= 0)
 		batt_drv->aafv_cliff_cycle = value;
-	mutex_unlock(&batt_drv->aafv_state_lock);
+	mutex_unlock(&batt_drv->aacp_state_lock);
 
 	return count;
 }
@@ -7992,7 +8480,7 @@ static ssize_t aafv_cliff_cycle_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aafv_cliff_cycle);
 }
 
-static const DEVICE_ATTR_RW(aafv_cliff_cycle);
+static DEVICE_ATTR_RW(aafv_cliff_cycle);
 
 static ssize_t aafv_cliff_offset_store(struct device *dev,
 				       struct device_attribute *attr,
@@ -8008,11 +8496,11 @@ static ssize_t aafv_cliff_offset_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	mutex_lock(&batt_drv->aafv_state_lock);
+	mutex_lock(&batt_drv->aacp_state_lock);
 	is_valid = gbms_aafv_offset_is_valid(profile, value, profile->aafv_nb_limits);
 	if (is_valid)
 		batt_drv->aafv_cliff_offset = value;
-	mutex_unlock(&batt_drv->aafv_state_lock);
+	mutex_unlock(&batt_drv->aacp_state_lock);
 
 	return count;
 }
@@ -8026,7 +8514,7 @@ static ssize_t aafv_cliff_offset_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aafv_cliff_offset);
 }
 
-static const DEVICE_ATTR_RW(aafv_cliff_offset);
+static DEVICE_ATTR_RW(aafv_cliff_offset);
 
 static ssize_t aafv_profile_store(struct device *dev,
 				  struct device_attribute *attr,
@@ -8061,12 +8549,13 @@ static ssize_t aafv_profile_store(struct device *dev,
 
 	is_valid = gbms_aafv_offset_is_valid(profile, of[nb_limits - 1], (u32)nb_limits);
 
-	if (batt_id == batt_drv->batt_id && is_valid) {
-		mutex_lock(&batt_drv->aafv_state_lock);
+	/* support id 0 as a common profile for all batteries */
+	if ((batt_id == 0 || batt_id == batt_drv->batt_id) && is_valid) {
+		mutex_lock(&batt_drv->aacp_state_lock);
 		memcpy(&profile->aafv_cycles, cc, sizeof(cc));
 		memcpy(&profile->aafv_offsets, of, sizeof(of));
 		profile->aafv_nb_limits = (u32)nb_limits;
-		mutex_unlock(&batt_drv->aafv_state_lock);
+		mutex_unlock(&batt_drv->aacp_state_lock);
 	}
 
 done:
@@ -8100,7 +8589,7 @@ static ssize_t aafv_profile_show(struct device *dev,
 	return count;
 }
 
-static const DEVICE_ATTR_RW(aafv_profile);
+static DEVICE_ATTR_RW(aafv_profile);
 
 
 static ssize_t aafv_offset_show(struct device *dev,
@@ -8112,12 +8601,462 @@ static ssize_t aafv_offset_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->chg_profile.aafv_offset);
 }
 
-static const DEVICE_ATTR_RO(aafv_offset);
+static DEVICE_ATTR_RO(aafv_offset);
+
+/* AACT ------------------------------------------------------------------- */
+
+static ssize_t aact_state_store(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	int val, ret = 0;
+
+	ret = kstrtoint(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+
+	mutex_lock(&batt_drv->aacp_state_lock);
+
+	if (batt_drv->aact_state == val)
+		goto done;
+
+	dev_info(batt_drv->device, "AACT: aact_state: %d -> %d\n", batt_drv->aact_state, val);
+	batt_drv->aact_state = val;
+
+	ret = aact_update_chg_table(batt_drv);
+	if (ret < 0) {
+		struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+		struct device_node *node = batt_drv->device->of_node;
+		int err;
+
+		/* reset AACT */
+		aact_reset(profile);
+
+		/* set state to unknown and init default charge table */
+		batt_drv->aact_state = BATT_AACT_UNKNOWN;
+		err = gbms_init_chg_profile(profile, node);
+		if (err == 0)
+			gbms_init_chg_table(profile, node, aacr_get_capacity_locked(batt_drv));
+
+		mutex_unlock(&batt_drv->aacp_state_lock);
+		return ret;
+	}
+
+done:
+	mutex_unlock(&batt_drv->aacp_state_lock);
+	return count;
+}
+
+static ssize_t aact_state_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			aact_enabled(batt_drv->aact_state, batt_drv->aacp_opt_out));
+}
+
+static DEVICE_ATTR_RW(aact_state);
+
+static ssize_t aact_config_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct device_node *node = batt_drv->device->of_node;
+	u32 aaxx_config;
+	int ret;
+
+	/* FIXME: b/403865140 split state from configuration */
+	ret = of_property_read_u32(node, "google,aact-config",  &aaxx_config);
+	if (ret < 0)
+		aaxx_config = BATT_AACT_UNKNOWN;
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", aaxx_config);
+}
+
+static DEVICE_ATTR_RO(aact_config);
+
+static int aact_load_profile(struct batt_drv *batt_drv)
+{
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	struct device_node *node = batt_drv->device->of_node;
+
+	/* No need to reload if aact profile exist */
+	if (profile->aact_cccm_limits)
+		return 0;
+
+	return gbms_init_aact_profile(profile, node);
+}
+
+static ssize_t aact_cv_limits_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	u32 tmp[GBMS_CHG_VOLT_NB_LIMITS_MAX] = { 0 };
+	int cnt = 0, ret;
+
+	/* can only be updated when AACT is disabled */
+	if (batt_drv->aact_state != BATT_AACT_DISABLED)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	cnt = sscanf(buf, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+		     &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5],
+		     &tmp[6], &tmp[7], &tmp[8], &tmp[9]);
+	memcpy(profile->aact_volt_limits, tmp, sizeof(tmp));
+	profile->aact_volt_nb_limits = (u32)cnt;
+
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+			     "AACT: update aact_cv_limits, cnt=%d", cnt);
+
+	return count;
+}
+
+static ssize_t aact_cv_limits_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	ssize_t count = 0;
+	int ret, i;
+
+	if (batt_drv->aact_state < 0)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < profile->aact_volt_nb_limits ; i++) {
+		const int cccm_limit = profile->aact_volt_limits[i];
+
+		if (i == profile->aact_volt_nb_limits - 1)
+			count += sysfs_emit_at(buf, count, "%u\n", cccm_limit);
+		else
+			count += sysfs_emit_at(buf, count, "%u, ", cccm_limit);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(aact_cv_limits);
+
+static ssize_t aact_temp_limits_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	u32 tmp[GBMS_CHG_TEMP_NB_LIMITS_MAX] = { 0 };
+	int cnt = 0, ret;
+
+	/* can only be updated when AACT is disabled */
+	if (batt_drv->aact_state != BATT_AACT_DISABLED)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	cnt = sscanf(buf, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+		     &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5],
+		     &tmp[6], &tmp[7], &tmp[8], &tmp[9]);
+	memcpy(profile->aact_temp_limits, tmp, sizeof(tmp));
+	profile->aact_temp_nb_limits = (u32)cnt;
+
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+			     "AACT: update aact_temp_limits, cnt=%d", cnt);
+
+	return count;
+}
+
+static ssize_t aact_temp_limits_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	ssize_t count = 0;
+	int ret, i;
+
+	if (batt_drv->aact_state < 0)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < profile->aact_temp_nb_limits ; i++) {
+		const int cccm_limit = profile->aact_temp_limits[i];
+
+		if (i == profile->aact_temp_nb_limits - 1)
+			count += sysfs_emit_at(buf, count, "%u\n", cccm_limit);
+		else
+			count += sysfs_emit_at(buf, count, "%u, ", cccm_limit);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(aact_temp_limits);
+
+static ssize_t aact_chg_ecc_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	u32 tmp[GBMS_AACT_NB_LIMITS_MAX] = { 0 };
+	int cnt = 0, ret;
+
+	/* can only be updated when AACT is disabled */
+	if (batt_drv->aact_state != BATT_AACT_DISABLED)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	cnt = sscanf(buf, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+		     &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5],
+		     &tmp[6], &tmp[7], &tmp[8], &tmp[9]);
+	memcpy(profile->aact_limits, tmp, sizeof(tmp));
+	profile->aact_nb_limits = (u32)cnt;
+
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+			     "AACT: update aact_chg_ecc, cnt=%d", cnt);
+
+	return count;
+}
+
+static ssize_t aact_chg_ecc_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	ssize_t count = 0;
+	int ret, i;
+
+	if (batt_drv->aact_state < 0)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < profile->aact_nb_limits ; i++) {
+		const int cccm_limit = profile->aact_limits[i];
+
+		if (i == profile->aact_nb_limits - 1)
+			count += sysfs_emit_at(buf, count, "%u\n", cccm_limit);
+		else
+			count += sysfs_emit_at(buf, count, "%u, ", cccm_limit);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(aact_chg_ecc);
+
+static ssize_t aact_profile_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	u32 pf[GBMS_AACT_PROFILE_MAX] = { 0 };
+	int cnt = 0, ret;
+	u32 cccm_array_size;
+
+	/* can only be updated when AACT is disabled */
+	if (batt_drv->aact_state != BATT_AACT_DISABLED)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	cccm_array_size = (profile->aact_temp_nb_limits - 1)
+			  * profile->aact_volt_nb_limits
+			  * profile->aact_nb_limits;
+
+	cnt = sscanf(buf, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u, \
+		     %u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u, \
+		     %u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u, \
+		     %u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u, \
+		     %u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u, \
+		     %u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u, \
+		     %u,%u,%u,%u",
+		     &pf[0], &pf[1], &pf[2], &pf[3], &pf[4], &pf[5], &pf[6], &pf[7],
+		     &pf[8], &pf[9], &pf[10], &pf[11], &pf[12], &pf[13], &pf[14], &pf[15],
+		     &pf[16], &pf[17], &pf[18], &pf[19], &pf[20], &pf[21], &pf[22], &pf[23],
+		     &pf[24], &pf[25], &pf[26], &pf[27], &pf[28], &pf[29], &pf[30], &pf[31],
+		     &pf[32], &pf[33], &pf[34], &pf[35], &pf[36], &pf[37], &pf[38], &pf[39],
+		     &pf[40], &pf[41], &pf[42], &pf[43], &pf[44], &pf[45], &pf[46], &pf[47],
+		     &pf[48], &pf[49], &pf[50], &pf[51], &pf[52], &pf[53], &pf[54], &pf[55],
+		     &pf[56], &pf[57], &pf[58], &pf[59], &pf[60], &pf[61], &pf[62], &pf[63],
+		     &pf[64], &pf[65], &pf[66], &pf[67], &pf[68], &pf[69], &pf[70], &pf[71],
+		     &pf[72], &pf[73], &pf[74], &pf[75], &pf[76], &pf[77], &pf[78], &pf[79],
+		     &pf[80], &pf[81], &pf[82], &pf[83], &pf[84], &pf[85], &pf[86], &pf[87],
+		     &pf[88], &pf[89], &pf[90], &pf[91], &pf[92], &pf[93], &pf[94], &pf[95],
+		     &pf[96], &pf[97], &pf[98], &pf[99]);
+
+	if (cnt != cccm_array_size)
+		return -ERANGE;
+
+	memcpy(profile->aact_cccm_limits, pf, sizeof(pf));
+	profile->aact_update_profile = true;
+
+	gbms_logbuffer_prlog(batt_drv->bd_log, LOGLEVEL_INFO, 0, LOGLEVEL_INFO,
+			     "AACT: update aact_profile, cnt=%d", cnt);
+
+	return count;
+}
+
+static ssize_t aact_profile_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	struct gbms_chg_profile *profile = &batt_drv->chg_profile;
+	ssize_t count = 0;
+	u32 cccm_array_size;
+	int ret, i;
+
+	if (batt_drv->aact_state < 0)
+		return count;
+
+	/* init aact profile */
+	ret = aact_load_profile(batt_drv);
+	if (ret < 0)
+		return ret;
+
+	cccm_array_size = (profile->aact_temp_nb_limits - 1)
+			  * profile->aact_volt_nb_limits
+			  * profile->aact_nb_limits;
+
+	for (i = 0; i < cccm_array_size ; i++) {
+		const int cccm_limit = profile->aact_cccm_limits[i];
+
+		if (i == cccm_array_size - 1)
+			count += sysfs_emit_at(buf, count, "%u\n", cccm_limit);
+		else
+			count += sysfs_emit_at(buf, count, "%u, ", cccm_limit);
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(aact_profile);
+
+/* AACP ------------------------------------------------------------------- */
+
+static ssize_t aacp_version_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	int value, ret = 0;
+
+	ret = kstrtoint(buf, 0, &value);
+	if (ret < 0)
+		return ret;
+
+	if (value >= 0)
+		batt_drv->aacp_version = value;
+
+	return count;
+}
+
+static ssize_t aacp_version_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacp_version);
+}
+
+static DEVICE_ATTR_RW(aacp_version);
+
+static ssize_t aacp_opt_out_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	int value, ret = 0;
+
+	ret = kstrtoint(buf, 0, &value);
+	if (ret < 0)
+		return ret;
+
+	if (value < 0 || value > 1)
+		return count;
+
+	mutex_lock(&batt_drv->aacp_state_lock);
+
+	batt_drv->aacp_opt_out = value;
+	/* offset is applied immediately */
+	aafv_update_offset(batt_drv);
+	/* cutoff on next connect */
+	aacp_update_opt_out_cutoff(batt_drv);
+
+	mutex_unlock(&batt_drv->aacp_state_lock);
+
+	return count;
+}
+
+static ssize_t aacp_opt_out_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacp_opt_out);
+}
+
+static DEVICE_ATTR_RW(aacp_opt_out);
+
+/* AACC ------------------------------------------------------------------- */
+
+static ssize_t aacc_show(struct device *dev,
+			 struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->aacc);
+}
+
+static DEVICE_ATTR_RO(aacc);
 
 /* Swelling  --------------------------------------------------------------- */
 
-static ssize_t swelling_data_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
+static ssize_t swelling_data_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8136,7 +9075,7 @@ static ssize_t swelling_data_show(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR_RO(swelling_data);
+static DEVICE_ATTR_RO(swelling_data);
 
 /* BHI --------------------------------------------------------------------- */
 
@@ -8150,10 +9089,9 @@ static ssize_t health_index_show(struct device *dev,
 			 BHI_ROUND_INDEX(batt_drv->health_data.bhi_index));
 }
 
-static const DEVICE_ATTR_RO(health_index);
+static DEVICE_ATTR_RO(health_index);
 
-static ssize_t health_status_show(struct device *dev,
-				  struct device_attribute *attr, char *buf)
+static ssize_t health_status_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8161,10 +9099,10 @@ static ssize_t health_status_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->health_data.bhi_status);
 }
 
-static const DEVICE_ATTR_RO(health_status);
+static DEVICE_ATTR_RO(health_status);
 
 static ssize_t health_impedance_index_show(struct device *dev,
-				      struct device_attribute *attr, char *buf)
+					   struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8173,10 +9111,10 @@ static ssize_t health_impedance_index_show(struct device *dev,
 			 BHI_ROUND_INDEX(batt_drv->health_data.bhi_imp_index));
 }
 
-static const DEVICE_ATTR_RO(health_impedance_index);
+static DEVICE_ATTR_RO(health_impedance_index);
 
 static ssize_t health_capacity_index_show(struct device *dev,
-				      struct device_attribute *attr, char *buf)
+					  struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8185,10 +9123,10 @@ static ssize_t health_capacity_index_show(struct device *dev,
 			 BHI_ROUND_INDEX(batt_drv->health_data.bhi_cap_index));
 }
 
-static const DEVICE_ATTR_RO(health_capacity_index);
+static DEVICE_ATTR_RO(health_capacity_index);
 
 static ssize_t health_index_stats_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
+				       struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8197,7 +9135,7 @@ static ssize_t health_index_stats_show(struct device *dev,
 	int len = 0, i;
 
 	/* might be POR and FG not ready */
-	if (bhi_data->battery_age <= 0 && bhi_data->cycle_count <= 0)
+	if (bhi_data->cycle_count <= 0)
 		return len;
 
 	mutex_lock(&batt_drv->chg_lock);
@@ -8247,7 +9185,7 @@ static ssize_t health_index_stats_show(struct device *dev,
 	return len;
 }
 
-static const DEVICE_ATTR_RO(health_index_stats);
+static DEVICE_ATTR_RO(health_index_stats);
 
 static ssize_t health_algo_store(struct device *dev,
 				 struct device_attribute *attr,
@@ -8275,8 +9213,7 @@ static ssize_t health_algo_store(struct device *dev,
 	return count;
 }
 
-static ssize_t health_algo_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
+static ssize_t health_algo_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8284,7 +9221,7 @@ static ssize_t health_algo_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->health_data.bhi_algo);
 }
 
-static const DEVICE_ATTR_RW(health_algo);
+static DEVICE_ATTR_RW(health_algo);
 
 static ssize_t health_indi_cap_store(struct device *dev,
 				 struct device_attribute *attr,
@@ -8306,8 +9243,7 @@ static ssize_t health_indi_cap_store(struct device *dev,
 	return count;
 }
 
-static ssize_t health_indi_cap_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
+static ssize_t health_indi_cap_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8315,7 +9251,7 @@ static ssize_t health_indi_cap_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->health_data.bhi_indi_cap);
 }
 
-static const DEVICE_ATTR_RW(health_indi_cap);
+static DEVICE_ATTR_RW(health_indi_cap);
 
 static ssize_t manufacturing_date_show(struct device *dev,
 				       struct device_attribute *attr, char *buf)
@@ -8341,7 +9277,7 @@ static ssize_t manufacturing_date_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%lld\n", rtc_tm_to_time64(&tm));
 }
 
-static const DEVICE_ATTR_RO(manufacturing_date);
+static DEVICE_ATTR_RO(manufacturing_date);
 
 #define FIRST_USAGE_DATE_DEFAULT	1606780800 //2020-12-01
 #define FIRST_USAGE_DATE_MAX		2147483647 //2038-01-19
@@ -8447,7 +9383,7 @@ static ssize_t first_usage_date_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%lld\n", rtc_tm_to_time64(&tm));
 }
 
-static const DEVICE_ATTR_RW(first_usage_date);
+static DEVICE_ATTR_RW(first_usage_date);
 
 static int batt_get_charging_state(const struct batt_drv *batt_drv)
 {
@@ -8486,8 +9422,7 @@ static int batt_get_charging_state(const struct batt_drv *batt_drv)
 	return ret;
 }
 
-static ssize_t charging_state_show(struct device *dev,
-				   struct device_attribute *attr, char *buf)
+static ssize_t charging_state_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8496,11 +9431,11 @@ static ssize_t charging_state_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", charging_state);
 }
 
-static const DEVICE_ATTR_RO(charging_state);
+static DEVICE_ATTR_RO(charging_state);
 
 static void batt_update_charging_policy(struct batt_drv *batt_drv)
 {
-	int value;
+	int value, ret;
 
 	value = gvotable_get_current_int_vote(batt_drv->charging_policy_votable);
 	if (value == batt_drv->charging_policy)
@@ -8513,12 +9448,25 @@ static void batt_update_charging_policy(struct batt_drv *batt_drv)
 		   batt_drv->charging_policy == CHARGING_POLICY_VOTE_ADAPTIVE_AON)
 		batt_set_health_charge_limit(batt_drv, -1);
 
-	pr_info("update charging_policy: %d -> %d\n", batt_drv->charging_policy, value);
+	gbms_logbuffer_devlog(batt_drv->ttf_stats.ttf_log, batt_drv->device,
+			      LOGLEVEL_INFO, 0, LOGLEVEL_DEBUG,
+			      "update charging_policy: %d -> %d\n",
+			      batt_drv->charging_policy, value);
 	batt_drv->charging_policy = value;
 
 	gvotable_cast_long_vote(batt_drv->csi_status_votable, "CSI_STATUS_DEFEND_LIMIT",
 				CSI_STATUS_Defender_Limit,
 				value == CHARGING_POLICY_VOTE_LONGLIFE);
+
+	if (value != CHARGING_POLICY_VOTE_LONGLIFE)
+		return;
+
+	/* for LONGLIFE: make full charge happens XXX cycles from the current cycle */
+	batt_drv->last_full_charge = batt_drv->hist_data_saved_cnt;
+	ret = gbms_storage_write(GBMS_TAG_FCRU, &batt_drv->last_full_charge,
+				 GBMS_FCRU_LEN);
+	if (ret < 0)
+		pr_err("failed to store FCNU (%d)\n", ret);
 }
 
 static int charging_policy_translate(int value)
@@ -8571,8 +9519,7 @@ static ssize_t charging_policy_store(struct device *dev,
 	return count;
 }
 
-static ssize_t charging_policy_show(struct device *dev,
-				    struct device_attribute *attr, char *buf)
+static ssize_t charging_policy_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8587,7 +9534,7 @@ static ssize_t charging_policy_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", value);
 }
 
-static const DEVICE_ATTR_RW(charging_policy);
+static DEVICE_ATTR_RW(charging_policy);
 
 static ssize_t health_set_cal_mode_store(struct device *dev,
 					 struct device_attribute *attr,
@@ -8639,7 +9586,7 @@ static ssize_t health_get_cal_state_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->health_data.cal_state);
 }
 
-static const DEVICE_ATTR_RO(health_get_cal_state);
+static DEVICE_ATTR_RO(health_get_cal_state);
 
 static ssize_t health_set_low_boundary_store(struct device *dev,
 					     struct device_attribute *attr,
@@ -8758,8 +9705,7 @@ static ssize_t health_set_low_boundary_show(struct device *dev, struct device_at
 	return pos;
 }
 
-static const DEVICE_ATTR_RW(health_set_low_boundary);
-
+static DEVICE_ATTR_RW(health_set_low_boundary);
 
 static int debug_bhi_cycle_grace_write(void *data, u64 val)
 {
@@ -8777,8 +9723,8 @@ DEFINE_SIMPLE_ATTRIBUTE(debug_bhi_cycle_grace_fops, NULL, debug_bhi_cycle_grace_
 /* CSI --------------------------------------------------------------------- */
 
 static ssize_t charging_speed_store(struct device *dev,
-				 struct device_attribute *attr,
-				 const char *buf, size_t count)
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8794,8 +9740,7 @@ static ssize_t charging_speed_store(struct device *dev,
 	return count;
 }
 
-static ssize_t charging_speed_show(struct device *dev,
-				   struct device_attribute *attr, char *buf)
+static ssize_t charging_speed_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8803,8 +9748,7 @@ static ssize_t charging_speed_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->csi_current_speed);
 }
 
-static const DEVICE_ATTR_RW(charging_speed);
-
+static DEVICE_ATTR_RW(charging_speed);
 
 static ssize_t csi_stats_store(struct device *dev, struct device_attribute *attr,
 			       const char *buf, size_t count)
@@ -8821,8 +9765,7 @@ static ssize_t csi_stats_store(struct device *dev, struct device_attribute *attr
 	return count;
 }
 
-static ssize_t csi_stats_show(struct device *dev,
-			      struct device_attribute *attr, char *buf)
+static ssize_t csi_stats_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct power_supply *psy = container_of(dev, struct power_supply, dev);
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
@@ -8846,7 +9789,7 @@ static ssize_t csi_stats_show(struct device *dev,
 			 (int)(stats->thermal_severity[4] * 100 / stats->time_sum));
 }
 
-static const DEVICE_ATTR_RW(csi_stats);
+static DEVICE_ATTR_RW(csi_stats);
 
 static ssize_t power_metrics_polling_rate_store(struct device *dev,
 						struct device_attribute *attr,
@@ -8875,7 +9818,7 @@ static ssize_t power_metrics_polling_rate_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->power_metrics.polling_rate);
 }
 
-static const DEVICE_ATTR_RW(power_metrics_polling_rate);
+static DEVICE_ATTR_RW(power_metrics_polling_rate);
 
 static ssize_t power_metrics_interval_store(struct device *dev,
 					    struct device_attribute *attr,
@@ -8905,7 +9848,7 @@ static ssize_t power_metrics_interval_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->power_metrics.interval);
 }
 
-static const DEVICE_ATTR_RW(power_metrics_interval);
+static DEVICE_ATTR_RW(power_metrics_interval);
 
 static long power_metrics_delta_cc(struct batt_drv *batt_drv, int idx1, int idx2)
 {
@@ -8985,7 +9928,7 @@ static ssize_t power_metrics_power_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%ld\n", power_avg / 1000000);
 }
 
-static const DEVICE_ATTR_RO(power_metrics_power);
+static DEVICE_ATTR_RO(power_metrics_power);
 
 static ssize_t power_metrics_current_show(struct device *dev,
 					  struct device_attribute *attr, char *buf)
@@ -9042,7 +9985,7 @@ static ssize_t power_metrics_current_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%ld\n", current_avg);
 }
 
-static const DEVICE_ATTR_RO(power_metrics_current);
+static DEVICE_ATTR_RO(power_metrics_current);
 
 static ssize_t dev_sn_store(struct device *dev,
 			    struct device_attribute *attr,
@@ -9052,7 +9995,7 @@ static ssize_t dev_sn_store(struct device *dev,
 	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
 	const size_t max_len = sizeof(batt_drv->dev_sn);
 
-	if (strscpy(batt_drv->dev_sn, buf, max_len) == -E2BIG)
+	if (strlcpy(batt_drv->dev_sn, buf, max_len) >= max_len)
 		pr_warn("Paired data out of bounds\n");
 
 	return count;
@@ -9067,7 +10010,7 @@ static ssize_t dev_sn_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%s\n", batt_drv->dev_sn);
 }
 
-static const DEVICE_ATTR_RW(dev_sn);
+static DEVICE_ATTR_RW(dev_sn);
 
 static ssize_t temp_filter_enable_store(struct device *dev,
 			    struct device_attribute *attr,
@@ -9103,251 +10046,141 @@ static ssize_t temp_filter_enable_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->temp_filter.enable);
 }
 
-static const DEVICE_ATTR_RW(temp_filter_enable);
+static DEVICE_ATTR_RW(temp_filter_enable);
+
+static ssize_t force_fcr_update_ops_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+	int val, ret;
+
+	ret = kstrtoint(buf, 0, &val);
+	if (ret < 0)
+		return ret;
+
+	/* chg_lock protect msc_logic */
+	mutex_lock(&batt_drv->batt_lock);
+
+	batt_drv->force_fcr_update_ops = val;
+
+	/* if force full charge was active */
+	if (batt_drv->force_fcr_update_ops == BATT_FCR_UPDATE_DISABLE)
+		batt_force_fcr_update_charging_policy(batt_drv, false);
+
+	mutex_unlock(&batt_drv->batt_lock);
+
+	return count;
+}
+
+static ssize_t force_fcr_update_ops_show(struct device *dev,
+					 struct device_attribute *attr, char *buf)
+{
+	struct power_supply *psy = container_of(dev, struct power_supply, dev);
+	struct batt_drv *batt_drv = power_supply_get_drvdata(psy);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", batt_drv->force_fcr_update_ops);
+}
+
+static DEVICE_ATTR_RW(force_fcr_update_ops);
+
 /* ------------------------------------------------------------------------- */
+
+static struct attribute *batt_attrs[] = {
+	&dev_attr_charge_stats.attr,
+	&dev_attr_charge_stats_actual.attr,
+	&dev_attr_charge_details.attr,
+	&dev_attr_ssoc_details.attr,
+	&dev_attr_charge_deadline.attr,
+	&dev_attr_charge_stage.attr,
+	&dev_attr_charge_limit.attr,
+	&dev_attr_time_to_ac.attr,
+	&dev_attr_ac_soc.attr,
+	&dev_attr_charge_deadline_dryrun.attr,
+	&dev_attr_charge_to_limit.attr,
+	&dev_attr_ttf_stats.attr,
+	&dev_attr_ttf_details.attr,
+	&dev_attr_bd_trickle_enable.attr,
+	&dev_attr_bd_trickle_cnt.attr,
+	&dev_attr_bd_trickle_recharge_soc.attr,
+	&dev_attr_bd_trickle_dry_run.attr,
+	&dev_attr_bd_trickle_reset_sec.attr,
+	&dev_attr_bd_clear.attr,
+	&dev_attr_pairing_state.attr,
+	&dev_attr_cycle_counts.attr,
+	&dev_attr_charge_full_estimate.attr,
+	&dev_attr_resistance_avg.attr,
+	&dev_attr_resistance.attr,
+	&dev_attr_charger_state.attr,
+	&dev_attr_charge_type.attr,
+	&dev_attr_constant_charge_current.attr,
+	&dev_attr_constant_charge_voltage.attr,
+	&dev_attr_health_safety_margin.attr,
+	&dev_attr_aacr_state.attr,
+	&dev_attr_aacr_config.attr,
+	&dev_attr_aacr_cycle_grace.attr,
+	&dev_attr_aacr_cycle_max.attr,
+	&dev_attr_aacr_algo.attr,
+	&dev_attr_aacr_min_capacity_rate.attr,
+	&dev_attr_aacr_cliff_capacity_rate.attr,
+	&dev_attr_aacr_profile.attr,
+	&dev_attr_aafv_state.attr,
+	&dev_attr_aafv_config.attr,
+	&dev_attr_aafv_apply_max.attr,
+	&dev_attr_aafv_max_offset.attr,
+	&dev_attr_aafv_cliff_cycle.attr,
+	&dev_attr_aafv_cliff_offset.attr,
+	&dev_attr_aafv_profile.attr,
+	&dev_attr_aafv_offset.attr,
+	&dev_attr_aact_state.attr,
+	&dev_attr_aact_config.attr,
+	&dev_attr_aact_cv_limits.attr,
+	&dev_attr_aact_temp_limits.attr,
+	&dev_attr_aact_chg_ecc.attr,
+	&dev_attr_aact_profile.attr,
+	&dev_attr_aacp_version.attr,
+	&dev_attr_aacp_opt_out.attr,
+	&dev_attr_aacc.attr,
+	&dev_attr_swelling_data.attr,
+	&dev_attr_health_index.attr,
+	&dev_attr_health_status.attr,
+	&dev_attr_health_capacity_index.attr,
+	&dev_attr_health_index_stats.attr,
+	&dev_attr_health_impedance_index.attr,
+	&dev_attr_health_algo.attr,
+	&dev_attr_health_indi_cap.attr,
+	&dev_attr_manufacturing_date.attr,
+	&dev_attr_first_usage_date.attr,
+	&dev_attr_charging_state.attr,
+	&dev_attr_charging_policy.attr,
+	&dev_attr_health_set_cal_mode.attr,
+	&dev_attr_health_get_cal_state.attr,
+	&dev_attr_health_set_low_boundary.attr,
+	&dev_attr_charging_speed.attr,
+	&dev_attr_csi_stats.attr,
+	&dev_attr_power_metrics_polling_rate.attr,
+	&dev_attr_power_metrics_interval.attr,
+	&dev_attr_power_metrics_power.attr,
+	&dev_attr_power_metrics_current.attr,
+	&dev_attr_dev_sn.attr,
+	&dev_attr_temp_filter_enable.attr,
+	&dev_attr_chg_profile_switch.attr,
+	&dev_attr_force_fcr_update_ops.attr,
+	NULL,
+};
+
+static const struct attribute_group batt_attr_grp = {
+	.attrs = batt_attrs,
+};
 
 static int batt_init_fs(struct batt_drv *batt_drv)
 {
 	int ret;
 
-	/* stats */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_stats);
+	ret = sysfs_create_group(&batt_drv->psy->dev.kobj, &batt_attr_grp);
 	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charge_stats\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_stats_actual);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charge_stats_actual\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_details);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charge_details\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_ssoc_details);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create ssoc_details\n");
-
-	/* adaptive charging */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_deadline);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create chg_deadline\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_stage);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charge_stage\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_limit);
-	if (ret != 0)
-		dev_err(&batt_drv->psy->dev, "Failed to create charge_limit\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_time_to_ac);
-	if (ret != 0)
-		dev_err(&batt_drv->psy->dev, "Failed to create time_to_ac\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_ac_soc);
-	if (ret != 0)
-		dev_err(&batt_drv->psy->dev, "Failed to create ac_soc\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_deadline_dryrun);
-	if (ret != 0)
-		dev_err(&batt_drv->psy->dev, "Failed to create chg_deadline_dryrun\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_to_limit);
-	if (ret != 0)
-		dev_err(&batt_drv->psy->dev, "Failed to create charge_to_limit\n");
-
-	/* time to full */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_ttf_stats);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create ttf_stats\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_ttf_details);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create ttf_details\n");
-
-	/* TRICKLE-DEFEND */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_bd_trickle_enable);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create bd_trickle_enable\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_bd_trickle_cnt);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create bd_trickle_cnt\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_bd_trickle_recharge_soc);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create bd_trickle_recharge_soc\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_bd_trickle_dry_run);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create bd_trickle_dry_run\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_bd_trickle_reset_sec);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create bd_trickle_reset_sec\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_bd_clear);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create bd_clear\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_pairing_state);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create pairing_state\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_cycle_counts);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create cycle_counts\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_full_estimate);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create chage_full_estimate\n");
-
-	/* google_resistance and resistance */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_resistance_avg);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create resistance_avg\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_resistance);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create resistance\n");
-
-	/* monitoring */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charger_state);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charger state\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charge_type);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charge_type\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_constant_charge_current);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create constant charge current\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_constant_charge_voltage);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create constant charge voltage\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_safety_margin);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health safety margin\n");
-	/* aacr */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aacr_state);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aacr state\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aacr_cycle_grace);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aacr cycle grace\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aacr_cycle_max);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aacr cycle max\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aacr_algo);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aacr algo\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aacr_min_capacity_rate);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aacr min capacity rate\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aacr_cliff_capacity_rate);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aacr cliff capacity rate\n");
-	/* aafv */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aafv_state);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aafv state\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aafv_apply_max);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aafv apply max\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aafv_max_offset);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aafv max offset\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aafv_cliff_cycle);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aafv cliff cycle\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aafv_cliff_offset);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aafv cliff offset\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aafv_profile);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aafv profile\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_aafv_offset);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create aafv offset\n");
-
-	/* health and health index */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_swelling_data);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create swelling_data\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_index);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health index\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_status);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health status\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_capacity_index);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health capacity index\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_index_stats);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health index stats\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_impedance_index);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health perf index\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_algo);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health algo\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_indi_cap);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health individual capacity\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_manufacturing_date);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create manufacturing date\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_first_usage_date);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create first usage date\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charging_state);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charging state\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charging_policy);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charging policy\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_set_cal_mode);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health_set_cal_mode\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_get_cal_state);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health_get_cal_state\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_health_set_low_boundary);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create health_set_low_boundary\n");
-
-	/* csi */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_charging_speed);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create charging speed\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_csi_stats);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create csi_stats\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_power_metrics_polling_rate);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create power_metrics_polling_rate\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_power_metrics_interval);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create power_metrics_interval\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_power_metrics_power);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create power_metrics_power\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_power_metrics_current);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create power_metrics_current\n");
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_dev_sn);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create dev sn\n");
-
-	/* temperature filter */
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_temp_filter_enable);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create temp_filter_enable\n");
-
-	ret = device_create_file(&batt_drv->psy->dev, &dev_attr_chg_profile_switch);
-	if (ret)
-		dev_err(&batt_drv->psy->dev, "Failed to create chg_profile_switch\n");
+		dev_err(&batt_drv->psy->dev, "Failed to create sysfs group\n");
 
 	return 0;
 
@@ -9388,16 +10221,10 @@ static int batt_init_debugfs(struct batt_drv *batt_drv)
 	debugfs_create_u32("blf_collect_now", 0600, de, &batt_drv->blf_collect_now);
 
 	/* defender */
-	debugfs_create_u32("fake_capacity", 0600, de,
-			    &batt_drv->fake_capacity);
+	debugfs_create_u32("fake_capacity", 0600, de, &batt_drv->fake_capacity);
 
-	/* aacr test */
-	debugfs_create_u32("fake_aacr_cc", 0600, de,
-			    &batt_drv->fake_aacr_cc);
-
-	/* aafv test */
-	debugfs_create_u32("fake_aafv_cc", 0600, de,
-			    &batt_drv->fake_aafv_cc);
+	/* aacp test */
+	debugfs_create_u32("fake_aacp_cc", 0600, de, &batt_drv->fake_aacp_cc);
 
 	/* health charging (adaptive charging) */
 	debugfs_create_file("chg_health_thr_soc", 0600, de, batt_drv,
@@ -9822,6 +10649,12 @@ static int batt_history_data_work(struct batt_drv *batt_drv)
 	if (cycle_cnt <= 0)
 		return -EIO;
 
+	/* update hist_data_saved_cnt when cycle count has been fixed */
+	if (cycle_cnt < batt_drv->cycle_count) {
+		batt_drv->cycle_count = cycle_cnt;
+		batt_drv->hist_data_saved_cnt = cycle_cnt - 1;
+	}
+
 	if (batt_drv->blf_collect_now) {
 		pr_info("MSC_HIST cycle_cnt:%d->%d saved_cnt=%d\n",
 			cycle_cnt, batt_drv->blf_collect_now,
@@ -9991,7 +10824,7 @@ done:
 
 static int batt_init_shutdown_flag(struct batt_drv *batt_drv)
 {
-	const struct device_node *node = batt_drv->device->of_node;
+	struct device_node *node = batt_drv->device->of_node;
 	u8 data;
 	int ret;
 
@@ -10116,6 +10949,7 @@ static void google_battery_work(struct work_struct *work)
 	const int prev_ssoc = ssoc_get_capacity(ssoc_state);
 	int present, fg_status, batt_temp, ret;
 	bool notify_psy_changed = false;
+	bool update_last_full_charge = false;
 
 	pr_debug("battery work item\n");
 
@@ -10243,8 +11077,10 @@ static void google_battery_work(struct work_struct *work)
 		}
 
 		/* slow down the updates at full */
-		if (full && batt_drv->chg_done)
+		if (full && batt_drv->chg_done) {
 			update_interval *= UPDATE_INTERVAL_AT_FULL_FACTOR;
+			update_last_full_charge = true;
+		}
 	}
 
 	/* notifications for this are debounced  */
@@ -10328,6 +11164,19 @@ static void google_battery_work(struct work_struct *work)
 
 	/* TODO: we might not need to do this all the time */
 	batt_cycle_count_update(batt_drv, ssoc_get_real(ssoc_state));
+
+	if (update_last_full_charge) {
+		batt_drv->last_full_charge = batt_drv->hist_data_saved_cnt;
+		ret = gbms_storage_write(GBMS_TAG_FCRU, &batt_drv->last_full_charge,
+					 GBMS_FCRU_LEN);
+		if (ret < 0)
+			pr_err("failed to store FCNU (%d)\n", ret);
+
+		dev_info(batt_drv->device, "force full charged at cycle %d\n",
+			 batt_drv->last_full_charge);
+
+		batt_force_fcr_update_charging_policy(batt_drv, false);
+	}
 
 reschedule:
 
@@ -10432,7 +11281,6 @@ static enum power_supply_property gbatt_battery_props[] = {
 	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,		/* 23 */
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
-	POWER_SUPPLY_PROP_VOLTAGE_AVG, // child: max1720x_battery.c
 
 	/*  hard limit to 26 */
 };
@@ -10724,6 +11572,17 @@ static int gbatt_get_property(struct power_supply *psy,
 			val->intval = batt_drv->capacity_level;
 		break;
 
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
+		mutex_lock(&batt_drv->chg_lock);
+		val->intval = batt_drv->cc_max;
+		mutex_unlock(&batt_drv->chg_lock);
+		break;
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
+		mutex_lock(&batt_drv->chg_lock);
+		val->intval = batt_drv->fv_uv;
+		mutex_unlock(&batt_drv->chg_lock);
+		break;
+
 	/*
 	 * POWER_SUPPLY_PROP_CHARGE_DONE comes from the charger BUT battery
 	 * has also an idea about it.
@@ -10806,6 +11665,13 @@ static int gbatt_get_property(struct power_supply *psy,
 		} else {
 			err = -EINVAL;
 		}
+		break;
+
+	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
+		if (batt_drv->topoff)
+			val->intval = batt_drv->topoff;
+		else
+			val->intval = -1;
 		break;
 
 	default:
@@ -10928,24 +11794,6 @@ static int gbatt_gbms_get_property(struct power_supply *psy,
 	 */
 	case GBMS_PROP_CHARGE_CHARGER_STATE:
 		val->int64val = batt_drv->chg_state.v;
-		break;
-
-	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
-		mutex_lock(&batt_drv->chg_lock);
-		val->prop.intval = batt_drv->cc_max;
-		mutex_unlock(&batt_drv->chg_lock);
-		break;
-	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
-		mutex_lock(&batt_drv->chg_lock);
-		val->prop.intval = batt_drv->fv_uv;
-		mutex_unlock(&batt_drv->chg_lock);
-		break;
-
-	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
-		if (batt_drv->topoff)
-			val->prop.intval = batt_drv->topoff;
-		else
-			val->prop.intval = -1;
 		break;
 
 	default:
@@ -11086,7 +11934,6 @@ static int batt_bhi_init(struct batt_drv *batt_drv)
 	struct bhi_data *bhi_data = &health_data->bhi_data;
 	u16 capacity_boundary[BHI_TREND_POINTS_SIZE];
 	int ret, i;
-	struct device_node *batt_id_node __free(device_node) = NULL;
 
 	/* set upper_bound value to BHI_CAPACITY_MAX(0xFFFF) */
 	memset(bhi_data->upper_bound.limit, 0xFF, sizeof(bhi_data->upper_bound.limit));
@@ -11149,9 +11996,7 @@ static int batt_bhi_init(struct batt_drv *batt_drv)
 	/* need battery id to get right trend points */
 	batt_drv->batt_id = GPSY_GET_PROP(batt_drv->fg_psy, GBMS_PROP_BATT_ID);
 
-	batt_id_node = gbms_batt_id_node(batt_drv->device->of_node);
-
-	ret = of_property_read_u16_array(batt_id_node,
+	ret = of_property_read_u16_array(gbms_batt_id_node(batt_drv->device->of_node),
 					 "google,bhi-l-bound", &capacity_boundary[0],
 					 BHI_TREND_POINTS_SIZE);
 	if (ret == 0 && bhi_bound_validity_check(capacity_boundary, 0,
@@ -11169,7 +12014,7 @@ static int batt_bhi_init(struct batt_drv *batt_drv)
 		 bhi_data->lower_bound.limit[6], bhi_data->lower_bound.limit[7],
 		 bhi_data->lower_bound.limit[8], bhi_data->lower_bound.limit[9]);
 
-	ret = of_property_read_u16_array(batt_id_node,
+	ret = of_property_read_u16_array(gbms_batt_id_node(batt_drv->device->of_node),
 					 "google,bhi-u-bound", &capacity_boundary[0],
 					 BHI_TREND_POINTS_SIZE);
 	if (ret == 0 && bhi_bound_validity_check(capacity_boundary, batt_drv->battery_capacity,
@@ -11187,7 +12032,7 @@ static int batt_bhi_init(struct batt_drv *batt_drv)
 		 bhi_data->upper_bound.limit[6], bhi_data->upper_bound.limit[7],
 		 bhi_data->upper_bound.limit[8], bhi_data->upper_bound.limit[9]);
 
-	ret = of_property_read_u16_array(batt_id_node,
+	ret = of_property_read_u16_array(gbms_batt_id_node(batt_drv->device->of_node),
 					 "google,bhi-l-trigger", &capacity_boundary[0],
 					 BHI_TREND_POINTS_SIZE);
 	if (ret == 0 && bhi_bound_validity_check(capacity_boundary, BHI_CAPACITY_MIN,
@@ -11203,7 +12048,7 @@ static int batt_bhi_init(struct batt_drv *batt_drv)
 			 bhi_data->lower_bound.trigger[8], bhi_data->lower_bound.trigger[9]);
 	}
 
-	ret = of_property_read_u16_array(batt_id_node,
+	ret = of_property_read_u16_array(gbms_batt_id_node(batt_drv->device->of_node),
 					 "google,bhi-u-trigger", &capacity_boundary[0],
 					 BHI_TREND_POINTS_SIZE);
 	if (ret == 0 && bhi_bound_validity_check(capacity_boundary, BHI_CAPACITY_MIN,
@@ -11312,7 +12157,6 @@ static void google_battery_init_work(struct work_struct *work)
 	struct batt_drv *batt_drv = container_of(work, struct batt_drv,
 						 init_work.work);
 	struct device_node *node = batt_drv->device->of_node;
-	struct device_node *batt_id_node __free(device_node) = NULL;
 	struct power_supply *fg_psy = batt_drv->fg_psy;
 	const char *batt_vs_tz_name = NULL;
 	int init_delay_ms, ret = 0;
@@ -11334,7 +12178,7 @@ static void google_battery_init_work(struct work_struct *work)
 	mutex_init(&batt_drv->cc_data.lock);
 	mutex_init(&batt_drv->bpst_state.lock);
 	mutex_init(&batt_drv->hda_tz_lock);
-	mutex_init(&batt_drv->aafv_state_lock);
+	mutex_init(&batt_drv->aacp_state_lock);
 
 	ret = of_property_read_u32(node, "google,batt-init-delay", &init_delay_ms);
 	if (ret < 0)
@@ -11435,7 +12279,6 @@ static void google_battery_init_work(struct work_struct *work)
 
 	/* could read EEPROM and history here */
 
-	/* init aafv setting */
 	batt_init_aafv_profile(batt_drv);
 
 	/* chg_profile will use cycle_count when aacr is enabled */
@@ -11507,7 +12350,7 @@ static void google_battery_init_work(struct work_struct *work)
 					DEFAULT_CHG_STATS_MIN_DELTA_SOC;
 
 	/* time to full */
-	ret = ttf_stats_init(&batt_drv->ttf_stats, batt_drv->device,
+	ret = ttf_stats_init(&batt_drv->ttf_stats, batt_drv->device->of_node,
 			     batt_drv->battery_capacity);
 	if (ret < 0)
 		pr_info("time to full not available\n");
@@ -11563,10 +12406,8 @@ static void google_battery_init_work(struct work_struct *work)
 				      &batt_vs_tz_name);
 	if (ret == 0) {
 		batt_drv->batt_vs_tz =
-		    thermal_tripless_zone_device_register(batt_vs_tz_name,
-							  batt_drv,
-							  &batt_vs_tz_ops,
-							  NULL);
+		    thermal_zone_device_register(batt_vs_tz_name, 0, 0,
+						 batt_drv, &batt_vs_tz_ops, NULL, 0, 0);
 		if (IS_ERR(batt_drv->batt_vs_tz)) {
 			pr_err("batt_vs tz register failed. err:%ld\n",
 			       PTR_ERR(batt_drv->batt_vs_tz));
@@ -11580,9 +12421,9 @@ static void google_battery_init_work(struct work_struct *work)
 	}
 
 	/* battery virtual sensor for more power */
-	batt_drv->batt_vs_mp_tz =
-	    thermal_tripless_zone_device_register("mdis_morepower", batt_drv,
-						  &batt_vs_mp_tz_ops, NULL);
+	batt_drv->batt_vs_mp_tz = thermal_zone_device_register("mdis_morepower", 0, 0,
+								batt_drv, &batt_vs_mp_tz_ops,
+								NULL, 0, 0);
 	if (IS_ERR(batt_drv->batt_vs_mp_tz)) {
 		pr_err("batt_vs_mp tz register failed. err: %ld\n",
 			PTR_ERR(batt_drv->batt_vs_mp_tz));
@@ -11591,9 +12432,9 @@ static void google_battery_init_work(struct work_struct *work)
 		thermal_zone_device_update(batt_drv->batt_vs_mp_tz, THERMAL_DEVICE_UP);
 	}
 
-	batt_drv->batt_vs_hda_tz =
-	    thermal_tripless_zone_device_register("thb_hda", batt_drv,
-						  &batt_vs_hda_tz_ops, NULL);
+	batt_drv->batt_vs_hda_tz = thermal_zone_device_register("thb_hda", 0, 0,
+								batt_drv, &batt_vs_hda_tz_ops,
+								NULL, 0, 0);
 	if (IS_ERR(batt_drv->batt_vs_hda_tz)) {
 		pr_err("batt_vs_hda_tz register failed. err: %ld\n",
 			PTR_ERR(batt_drv->batt_vs_hda_tz));
@@ -11625,14 +12466,12 @@ static void google_battery_init_work(struct work_struct *work)
 	if (batt_drv->dc_irdrop)
 		pr_info("dc irdrop is enabled\n");
 
-	batt_id_node = gbms_batt_id_node(node);
-
-	batt_drv->pullback_current = of_property_read_bool(batt_id_node,
+	batt_drv->pullback_current = of_property_read_bool(gbms_batt_id_node(node),
 							   "google,pullback-current");
 	if (batt_drv->pullback_current)
 		pr_info("pullback current is enabled\n");
 
-	batt_drv->allow_higher_fv = of_property_read_bool(batt_id_node,
+	batt_drv->allow_higher_fv = of_property_read_bool(gbms_batt_id_node(node),
 							   "google,allow-higher-fv");
 	if (batt_drv->allow_higher_fv)
 		pr_info("allow higher fv is enabled\n");
@@ -11641,6 +12480,28 @@ static void google_battery_init_work(struct work_struct *work)
 				   &batt_drv->health_data.bhi_data.first_usage_date);
 	if (ret < 0)
 		batt_drv->health_data.bhi_data.first_usage_date = -1;
+
+	/* AACP opt-out */
+	ret = of_property_read_u32(node, "google,aacp-opt-out-cut-off-cycles",
+				   &batt_drv->aacp_opt_out_cut_off_cycles);
+	if (ret < 0)
+		batt_drv->aacp_opt_out_cut_off_cycles = AACP_OPT_OUT_CUT_OFF_CYCLES_DEFAULT;
+
+	/* AACP health status */
+	ret = of_property_read_u32(node, "google,aacp-health-over-cliff",
+				   &batt_drv->aacp_health_over_cliff);
+	if (ret < 0)
+		batt_drv->aacp_health_over_cliff = BH_NEEDS_REPLACEMENT;
+
+	ret = of_property_read_u32(node, "google,aacp-health-over-cutoff",
+				   &batt_drv->aacp_health_over_cutoff);
+	if (ret < 0)
+		batt_drv->aacp_health_over_cutoff = BH_MARGINAL;
+
+	ret = of_property_read_u32(node, "google,aacp-health-last-entry",
+				   &batt_drv->aacp_health_last_entry);
+	if (ret < 0)
+		batt_drv->aacp_health_last_entry = BH_MARGINAL;
 
 	/* single battery disconnect */
 	(void)batt_bpst_init_debugfs(batt_drv);
@@ -11677,6 +12538,28 @@ static void google_battery_init_work(struct work_struct *work)
 	schedule_delayed_work(&batt_drv->power_metrics.work,
 			      msecs_to_jiffies(batt_drv->power_metrics.polling_rate * 1000));
 
+	/* configure force full charge when charge limit is enable */
+	ret = of_property_read_s32(node, "google,force-fcn-update-cycle",
+				   &batt_drv->force_fcr_update_cycle);
+	if (ret != 0)
+		batt_drv->force_fcr_update_cycle = DEFAULT_FORCE_FCR_UPDATE_CYCLE;
+
+	ret = gbms_storage_read(GBMS_TAG_FCRU, &batt_drv->last_full_charge, GBMS_FCRU_LEN);
+	if (ret < 0)
+		dev_err(batt_drv->device, "failed to read GBMS_TAG_FCRU (%d)\n", ret);
+
+	/* if force_fcr_update_cycle has default value of eeprom */
+	if (batt_drv->last_full_charge == 0xFFFF)
+		batt_drv->last_full_charge = 0;
+
+	/* configure force full charge mode */
+	ret = of_property_read_s32(node, "google,force-fcn-update-ops",
+				   &batt_drv->force_fcr_update_ops);
+	if (ret != 0)
+		batt_drv->force_fcr_update_ops = BATT_FCR_UPDATE_FULLCHARGE_DELTA;
+
+
+
 	pr_info("google_battery init_work done\n");
 
 	batt_drv->init_complete = true;
@@ -11695,8 +12578,7 @@ static struct thermal_zone_device_ops google_battery_tz_ops = {
 	.get_temp = google_battery_tz_get_cycle_count,
 };
 
-static int batt_ravg_init(struct batt_res *res_state,
-			  const struct device_node *node)
+static int batt_ravg_init(struct batt_res *res_state, struct device_node *node)
 {
 	int ret;
 
@@ -11876,17 +12758,31 @@ static int google_battery_probe(struct platform_device *pdev)
 	ret = of_property_read_u32(pdev->dev.of_node, "google,hda-tz-limit",
 				   &batt_drv->hda_tz_limit);
 
-	/* AACR server side */
-	batt_drv->aacr_cycle_grace = AACR_START_CYCLE_DEFAULT;
-	batt_drv->aacr_cycle_max = AACR_MAX_CYCLE_DEFAULT;
-	batt_drv->aacr_state = BATT_AACR_DISABLED;
+	/* TODO: b/403865140 move these configurations before the votables */
 
-	/* AAFV server side */
-	batt_drv->aafv_state = BATT_AAFV_DISABLED;
+	/* AAFV configuration */
+	batt_drv->aafv_state = BATT_AAFV_UNKNOWN;
 	batt_drv->aafv_apply_max = AAFV_APPLY_MAX_DEFAULT;
 	batt_drv->aafv_max_offset = AAFV_MAX_OFFSET_DEFAULT;
 	batt_drv->aafv_cliff_cycle = AAFV_CLIFF_CYCLE_DEFAULT;
 	batt_drv->aafv_cliff_offset = AAFV_CLIFF_OFFSET_DEFAULT;
+
+	/* TODO: b/403865140 refactor AACT to batt_init_aact_profile() */
+	/* NOTE: might need to have a device and batteryID configs */
+	ret = of_property_read_u32(pdev->dev.of_node, "google,aact-config",
+				   &batt_drv->aact_state);
+	if (ret < 0)
+		batt_drv->aact_state = BATT_AACT_UNKNOWN;
+
+	/*
+	 * AA** features are opted opted out until the state is confirmed by
+	 * a system property during boot. features that are enabled by default
+	 * cannot be opted out.
+	 */
+	batt_drv->aacp_opt_out = BATT_AACP_OPT_OUT_ENABLED;
+
+	/* AACP version will be updated from server side when parameters updated */
+	batt_drv->aacp_version = 1;
 
 	/* create the sysfs node */
 	batt_init_fs(batt_drv);
@@ -11918,12 +12814,12 @@ static int google_battery_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void google_battery_remove(struct platform_device *pdev)
+static int google_battery_remove(struct platform_device *pdev)
 {
 	struct batt_drv *batt_drv = platform_get_drvdata(pdev);
 
 	if (!batt_drv)
-		return;
+		return 0;
 
 	power_supply_unreg_notifier(&batt_drv->fg_nb);
 
@@ -11956,6 +12852,8 @@ static void google_battery_remove(struct platform_device *pdev)
 	batt_drv->csi_type_votable = NULL;
 	batt_drv->charging_policy_votable = NULL;
 	batt_drv->point_full_ui_soc_votable = NULL;
+
+	return 0;
 }
 
 static void google_battery_shutdown(struct platform_device *pdev)

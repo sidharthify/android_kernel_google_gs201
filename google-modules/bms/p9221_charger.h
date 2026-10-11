@@ -17,7 +17,6 @@
 #define __P9221_CHARGER_H__
 
 #include <linux/gpio.h>
-#include <linux/gpio/consumer.h>
 #include <linux/crc8.h>
 #include <misc/gvotable.h>
 #include "gbms_power_supply.h"
@@ -39,7 +38,7 @@
 #define P9221_ALIGN_VOTER			"WLC_ALIGN_VOTER"
 #define WLC_MFG_GOOGLE				0x72
 #define WLC_MFG_108_FOR_GOOGLE			0x108
-#define P9221_DC_ICL_BPP_UA			700000
+#define P9221_DC_ICL_BPP_UA			900000
 #define P9221_DC_ICL_BPP_RAMP_DEFAULT_UA	900000
 #define P9221_DC_ICL_BPP_RAMP_DELAY_DEFAULT_MS	(7 * 60 * 1000)  /* 7 mins */
 #define P9221_DC_ICL_EPP_UA			1100000
@@ -710,23 +709,25 @@ struct p9221_fod_data {
 };
 
 struct p9221_charger_platform_data {
-	struct gpio_desc		*irq_gpio;
+	int				irq_gpio;
 	int				irq_int;
 	u64				irq_flag;
-	struct gpio_desc		*irq_det_gpio;
+	int				irq_det_gpio;
 	int				irq_det_int;
-	struct gpio_desc		*qien_gpio;
-	struct gpio_desc		*ldo_en_gpio;
-	struct gpio_desc		*slct_gpio;
+	int				qien_gpio;
+	int				ldo_en_gpio;
+	int				slct_gpio;
 	int				slct_value;
-	struct gpio_desc		*ben_gpio;
-	struct gpio_desc		*ext_ben_gpio;
-	struct gpio_desc		*switch_gpio;
-	struct gpio_desc		*boost_gpio;
-	struct gpio_desc		*dc_switch_gpio;
-	struct gpio_desc		*wcin_inlim_en_gpio;
-	struct gpio_desc		*qi_vbus_en;
-	struct gpio_desc		*wlc_en;
+	int				ben_gpio;
+	int				ext_ben_gpio;
+	int				switch_gpio;
+	int				boost_gpio;
+	int				dc_switch_gpio;
+	int				wcin_inlim_en_gpio;
+	int				qi_vbus_en;
+	int				qi_vbus_en_act_low;
+	int				wlc_en;
+	int				wlc_en_act_low;
 	int				max_vout_mv;
 	int				epp_vout_mv;
 	u8				fod[P9221R5_NUM_FOD];
@@ -771,7 +772,6 @@ struct p9221_charger_platform_data {
 	bool				enable_15w;
 	bool				has_rtx;
 	bool				has_rtx_gpio;
-	bool				rtx_wait_ben;
 	u32				power_mitigate_threshold;
 	u32				power_mitigate_ac_threshold;
 	u32				alignment_scalar_low_current;
@@ -792,6 +792,7 @@ struct p9221_charger_platform_data {
 	u32				bpp_lv_icl;		/* BPP ICL with lower Vout */
 	u32				bpp_icl_ramp_ua;	/* BPP ramp ICL */
 	u32				bpp_lv_icl_ramp_ua;	/* BPP ramp ICL with lower Vout */
+	u32				dc_icl_gpp;		/* DC_ICL for GPP */
 	/* calibrate light load */
 	bool				light_load;
 	int				nb_hpp_fod_vol;
@@ -1136,7 +1137,7 @@ bool p9xxx_is_capdiv_en(struct p9221_charger_data *charger);
 int p9221_wlc_disable(struct p9221_charger_data *charger, int disable, u8 reason);
 int p9221_set_auth_dc_icl(struct p9221_charger_data *charger, bool enable);
 int p9xxx_sw_ramp_icl(struct p9221_charger_data *charger, const int icl_target);
-int p9xxx_gpio_set_value(struct p9221_charger_data *charger, struct gpio_desc *gpio, int value);
+int p9xxx_gpio_set_value(struct p9221_charger_data *charger, int gpio, int value);
 bool is_ping_freq_fixed_at(struct p9221_charger_data *charger, u32 khz);
 
 void p9xxx_gpio_init(struct p9221_charger_data *charger);

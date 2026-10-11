@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright 2020,2023 Google, LLC
+ * Copyright 2020 Google, LLC
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -348,7 +348,7 @@ static irqreturn_t max777x9_pmic_irq(int irq, void *ptr)
 	}
 
 	/* just clear for max77729f */
-	pr_debug("irq=%d INTSRC:%x\n", irq, intsrc);
+	dev_info_ratelimited(data->dev, "irq=%d INTSRC:%x\n", irq, intsrc);
 	if (data->pmic_id != MAX77759_PMIC_PMIC_ID_MW)
 		return IRQ_HANDLED;
 
@@ -465,7 +465,6 @@ static int max77759_find_fg(struct max77729_pmic_data *data)
 		return -ENXIO;
 
 	data->fg_i2c_client = of_find_i2c_device_by_node(dn);
-	of_node_put(dn);
 	if (!data->fg_i2c_client)
 		return -EAGAIN;
 
@@ -938,16 +937,16 @@ static void max77759_gpio_set(struct gpio_chip *chip,
 	}
 
 	if (offset == MAX77759_GPIO5_OFF) {
-		dir = val & MAX77759_GPIO5_DIR_MASK;
-		if (dir != MAX77759_GPIO5_DIR(MAX77759_GPIO_DIR_OUT))  {
+		dir = !(val & MAX77759_GPIO5_DIR_MASK);
+		if (dir != GPIOF_DIR_OUT)  {
 			dev_err(data->dev, "not output\n");
 			return;
 		}
 		new_val = val & ~MAX77759_GPIO5_VAL_MASK;
 		new_val |= MAX77759_GPIO5_VAL(value);
 	} else {  /* MAX77759_GPIO6_OFF */
-		dir = val & MAX77759_GPIO6_DIR_MASK;
-		if (dir != MAX77759_GPIO6_DIR(MAX77759_GPIO_DIR_OUT))  {
+		dir = !(val & MAX77759_GPIO6_DIR_MASK);
+		if (dir != GPIOF_DIR_OUT)  {
 			dev_err(data->dev, "not output\n");
 			return;
 		}
@@ -1208,12 +1207,12 @@ static struct irq_chip max77729_gpio_irq_chip = {
 /* ----------------------------------------------------------------------- */
 
 
-static int max77729_pmic_probe(struct i2c_client *client)
+static int max77729_pmic_probe(struct i2c_client *client,
+			       const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct max77729_pmic_data *data;
 	int irq_gpio, pmic_id, ret =0;
-	struct device_node *dn;
 
 	pmic_id = max77729_pmic_read_id(client);
 	if (pmic_id < 0)
@@ -1332,12 +1331,10 @@ static int max77729_pmic_probe(struct i2c_client *client)
 		data->gpio.ngpio = MAX77759_NUM_GPIOS;
 		data->gpio.can_sleep = true;
 		data->gpio.base	= -1;
-		/* balance of_node_put() in of_find_node_by_name() */
-		of_node_get(dev->of_node);
-		dn = of_find_node_by_name(dev->of_node, data->gpio.label);
-		if (!dn)
+		data->gpio.of_node = of_find_node_by_name(dev->of_node,
+							  data->gpio.label);
+		if (!data->gpio.of_node)
 			dev_err(dev, "Failed to find %s DT node\n", data->gpio.label);
-		data->gpio.fwnode = of_node_to_fwnode(dn);
 
 		/* check regmap-irq */
 		girq->chip = &max77729_gpio_irq_chip;

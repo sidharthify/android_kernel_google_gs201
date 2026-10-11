@@ -106,6 +106,7 @@ static u8 max77779_int_mask[MAX77779_CHG_INT_COUNT] = {
 
 static int max77779_is_limited(struct max77779_chgr_data *data);
 static int max77779_wcin_current_now(struct max77779_chgr_data *data, int *iic);
+static int max77779_current_check_mode(struct max77779_chgr_data *data);
 
 static inline int max77779_reg_read(struct max77779_chgr_data *data, uint8_t reg,
 				    uint8_t *val)
@@ -762,7 +763,8 @@ static int max77779_get_usecase(struct max77779_foreach_cb_data *cb_data,
 			usecase = GSU_MODE_USB_DC;
 		} else if (cb_data->stby_on && !chgr_on) {
 			mode = MAX77779_CHGR_MODE_ALL_OFF;
-			usecase = GSU_MODE_STANDBY;
+
+			usecase = cb_data->buck_on ? GSU_MODE_STANDBY_BUCK_ON : GSU_MODE_STANDBY;
 		}
 
 	}
@@ -985,11 +987,6 @@ static int max77779_mode_callback(struct gvotable_election *el,
 	/* read directly instead of using the vote */
 	cb_data.wlc_rx = (max77779_wcin_is_online(data) &&
 			 !data->wcin_input_suspend) || data->wlc_spoof;
-	/* Block wlc_rx for POGO_VIN if it is from POGO_VOUT */
-	cb_data.wlc_rx = cb_data.wlc_rx &&
-			 from_use_case != GSU_MODE_POGO_VOUT &&
-			 from_use_case != GSU_MODE_USB_CHG_POGO_VOUT &&
-			 from_use_case != GSU_MODE_USB_OTG_POGO_VOUT;
 	cb_data.wlcin_off = !!data->wcin_input_suspend;
 
 	pr_debug("%s: wcin_is_online=%d data->wcin_input_suspend=%d data->wlc_spoof=%d\n", __func__,
@@ -997,6 +994,8 @@ static int max77779_mode_callback(struct gvotable_election *el,
 
 	/* now scan all the reasons, accumulate in cb_data */
 	gvotable_election_for_each(el, max77779_foreach_callback, &cb_data);
+
+	cb_data.wlc_rx = cb_data.wlc_rx && !cb_data.pogo_vout;
 
 	nope = !cb_data.use_raw && !cb_data.stby_on && !cb_data.dc_on &&
 	       !cb_data.chgr_on && !cb_data.buck_on &&
@@ -1825,7 +1824,7 @@ static void max77779_wcin_inlim_work_en(struct max77779_chgr_data *data, bool en
 #if IS_ENABLED(CONFIG_GPIOLIB)
 static int max77779_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
 {
-	return GPIO_LINE_DIRECTION_OUT;
+	return GPIOF_DIR_OUT;
 }
 
 static int max77779_gpio_get(struct gpio_chip *chip, unsigned int offset)
@@ -1882,9 +1881,17 @@ static enum power_supply_property max77779_wcin_props[] = {
 
 static int max77779_wcin_is_valid(struct max77779_chgr_data *data)
 {
-	uint8_t val;
+	uint8_t val = 0;
 	uint8_t wcin_dtls;
-	int ret;
+	int ret = 0;
+
+	if (data->uc_data.pogo_vout_en >= 0) {
+		val = max77779_current_check_mode(data);
+		ret = gpio_get_value_cansleep(data->uc_data.pogo_vout_en);
+	}
+
+	if (val == MAX77779_CHGR_MODE_BOOST_UNO_ON || ret > 0)
+		return 0;
 
 	ret = max77779_reg_read(data, MAX77779_CHG_DETAILS_00, &val);
 	if (ret < 0)
@@ -1895,15 +1902,6 @@ static int max77779_wcin_is_valid(struct max77779_chgr_data *data)
 
 static inline int max77779_wcin_is_online(struct max77779_chgr_data *data)
 {
-	uint8_t val;
-	int ret;
-
-	ret = max77779_reg_read(data, MAX77779_CHG_CNFG_12, &val);
-	if (ret < 0)
-		return ret;
-	if (!_max77779_chg_cnfg_12_wcinsel_get(val))
-		return 0;
-
 	return max77779_wcin_is_valid(data);
 }
 
@@ -2259,6 +2257,10 @@ static bool max77779_is_full(struct max77779_chgr_data *data)
 	int vlimit = data->chg_term_voltage;
 	int ret, vbatt = 0;
 
+	/* Not in the last voltage index */
+	if (vlimit == 0)
+		return false;
+
 	/*
 	 * Set voltage level to leave CHARGER_DONE (BATT_RL_STATUS_DISCHARGE)
 	 * and enter BATT_RL_STATUS_RECHARGE. It sets STATUS_DISCHARGE again
@@ -2461,6 +2463,25 @@ static int max77779_set_online(struct max77779_chgr_data *data, bool online)
 	return ret;
 }
 
+#define MAX77779_CHG_TERM_VOL_TOLERANCE 50 /* 50mV */
+
+static int max77779_set_chg_term_voltage(struct max77779_chgr_data *data, int fv_uv)
+{
+	int vlimit = 0, msc_last = 0;
+
+	if (!data->msc_last_votable)
+		data->msc_last_votable = gvotable_election_get_handle("MSC_LAST");
+	if (!data->msc_last_votable)
+		return -EINVAL;
+
+	msc_last = gvotable_get_current_int_vote(data->msc_last_votable);
+	if (msc_last == 1)
+		vlimit = (fv_uv / 1000) - MAX77779_CHG_TERM_VOL_TOLERANCE;
+	data->chg_term_voltage = vlimit;
+
+	return msc_last;
+}
+
 static int max77779_psy_set_property(struct power_supply *psy,
 				     enum power_supply_property psp,
 				     const union power_supply_propval *pval)
@@ -2507,13 +2528,18 @@ static int max77779_psy_set_property(struct power_supply *psy,
 			power_supply_changed(data->psy);
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE_MAX:
+	{
+		int msc_last;
+
 		ret = max77779_set_regulation_voltage(data, pval->intval);
 		pr_debug("%s: charge_voltage=%d (%d)\n",
 			__func__, pval->intval, ret);
 		if (ret)
 			break;
-		if (max77779_is_online(data) && pval->intval >= data->chg_term_voltage * 1000)
+		msc_last = max77779_set_chg_term_voltage(data, pval->intval);
+		if (max77779_is_online(data) && msc_last == 1)
 			ret = max77779_higher_headroom_enable(data, true);
+	}
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		ret = max77779_set_online(data, pval->intval != 0);
@@ -3581,7 +3607,6 @@ int max77779_charger_init(struct max77779_chgr_data *data)
 {
 	struct power_supply_config chgr_psy_cfg = { 0 };
 	struct device *dev = data->dev;
-	struct device_node __maybe_unused *dn;
 	const char *tmp;
 	u32 usb_otg_mv;
 	int ret = 0;
@@ -3671,17 +3696,10 @@ int max77779_charger_init(struct max77779_chgr_data *data)
 
 	data->otg_changed = false;
 
-	ret = of_property_read_u32(dev->of_node, "max77779,chg-term-voltage",
-				   &data->chg_term_voltage);
-	if (ret < 0)
-		data->chg_term_voltage = 0;
-
 	ret = of_property_read_u32(dev->of_node, "max77779,chg-term-volt-debounce",
 				   &data->chg_term_volt_debounce);
 	if (ret < 0)
 		data->chg_term_volt_debounce = CHG_TERM_VOLT_DEBOUNCE;
-	if (data->chg_term_voltage == 0)
-		data->chg_term_volt_debounce = 0;
 
 	ret = of_property_read_u32(dev->of_node, "max77779,usb-otg-mv", &usb_otg_mv);
 	if (ret)
@@ -3715,12 +3733,10 @@ int max77779_charger_init(struct max77779_chgr_data *data)
 #if IS_ENABLED(CONFIG_GPIOLIB)
 	max77779_gpio_init(data);
 	data->gpio.parent = dev;
-	/* balance of_node_put() in of_find_node_by_name() */
-	of_node_get(dev->of_node);
-	dn = of_find_node_by_name(dev->of_node, data->gpio.label);
-	if (!dn)
+	data->gpio.of_node = of_find_node_by_name(dev->of_node,
+							    data->gpio.label);
+	if (!data->gpio.of_node)
 		dev_warn(dev, "Failed to find %s DT node\n", data->gpio.label);
-	data->gpio.fwnode = of_node_to_fwnode(dn);
 
 	ret = devm_gpiochip_add_data(dev, &data->gpio, data);
 	dev_dbg(dev, "%d GPIOs registered ret: %d\n", data->gpio.ngpio, ret);

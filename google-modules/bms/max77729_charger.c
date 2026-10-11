@@ -1153,7 +1153,8 @@ static int max77729_setup_votables(struct max77729_chgr_data *data)
 	return 0;
 }
 
-static int max77729_charger_probe(struct i2c_client *client)
+static int max77729_charger_probe(struct i2c_client *client,
+				  const struct i2c_device_id *id)
 {
 	struct max77729_chgr_data *data;
 	struct device *dev = &client->dev;
