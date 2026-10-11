@@ -92,6 +92,8 @@ sscoredump.ko
 s2mpg1x-gpio.ko
 s2mpg12-mfd.ko
 s2mpg13-mfd.ko
+deferred-free-helper.ko
+page_pool.ko
 samsung_dma_heap.ko
 ufs-exynos-gs.ko
 spi-s3c64xx.ko
@@ -195,6 +197,7 @@ st21nfc.ko
 st54spi.ko
 st33spi.ko
 shm_ipc.ko
+boot_device_spi.ko
 cpif_page.ko
 cpif.ko
 cp_thermal_zone.ko
