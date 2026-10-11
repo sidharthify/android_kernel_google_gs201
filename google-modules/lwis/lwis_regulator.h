@@ -3,10 +3,6 @@
  * Google LWIS Regulator Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef LWIS_REGULATOR_H_
@@ -43,8 +39,8 @@ void lwis_regulator_list_free(struct lwis_regulator_list *list);
  *  lwis_regulator_get: Register the regulator by name.
  *  Returns: index number (>= 0) if success, -ve if error
  */
-int lwis_regulator_get(struct lwis_regulator_list *list, const char *name,
-		       int voltage, struct device *dev);
+int lwis_regulator_get(struct lwis_regulator_list *list, char *name, int voltage,
+		       struct device *dev);
 
 /*
  *  lwis_regulator_put_by_idx: Unregister the regulator by index.

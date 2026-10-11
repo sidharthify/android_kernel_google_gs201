@@ -3,10 +3,6 @@
  * Google LWIS Clock Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef LWIS_CLOCK_H_
@@ -21,7 +17,7 @@
 
 struct lwis_clock {
 	struct clk *clk;
-	const char *name;
+	char *name;
 	uint32_t rate;
 };
 
@@ -52,8 +48,7 @@ void lwis_clock_list_free(struct lwis_clock_list *list);
  *  clock rate.
  *  Returns: index number (>= 0) if success, -ve if error
  */
-int lwis_clock_get(struct lwis_clock_list *list, const char *name, struct device *dev,
-		   uint32_t rate);
+int lwis_clock_get(struct lwis_clock_list *list, char *name, struct device *dev, uint32_t rate);
 
 /*
  *  lwis_clock_put_by_idx: Unregister the clock by index.

@@ -3,10 +3,6 @@
  * Google LWIS Interrupt Handler
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef LWIS_INTERRUPT_H_
@@ -122,7 +118,7 @@ void lwis_interrupt_list_free(struct lwis_interrupt_list *list);
 /*
  *  lwis_interrupt_init: Initialize the interrupt by index.
  */
-int lwis_interrupt_init(struct lwis_interrupt_list *list, int index, const char *name);
+int lwis_interrupt_init(struct lwis_interrupt_list *list, int index, char *name);
 
 /*
  *  lwis_interrupt_get: Register the interrupt by index.
@@ -135,7 +131,7 @@ int lwis_interrupt_get(struct lwis_interrupt_list *list, int index,
  *  lwis_interrupt_get_gpio_irq: Register the GPIO interrupt by index
  *  Returns: 0 if success, -ve if error
  */
-int lwis_interrupt_get_gpio_irq(struct lwis_interrupt_list *list, int index, const char *name,
+int lwis_interrupt_get_gpio_irq(struct lwis_interrupt_list *list, int index, char *name,
 				int gpio_irq, int32_t irq_gpios_types);
 
 /*

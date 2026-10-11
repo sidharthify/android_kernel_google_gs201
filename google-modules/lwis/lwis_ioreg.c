@@ -3,10 +3,6 @@
  * Google LWIS Register I/O Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME "-ioreg: " fmt
@@ -121,7 +117,7 @@ void lwis_ioreg_list_free(struct lwis_ioreg_device *ioreg_dev)
 	list->count = 0;
 }
 
-int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, const char *name)
+int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, char *name)
 {
 	struct resource *res;
 	struct lwis_ioreg *block;

@@ -18,6 +18,14 @@
 #include "lwis_debug.h"
 #include "lwis_platform.h"
 
+/*
+ * module_param macro defines the parameter name, type and permission bits
+ * in sysfs file system. 0644 represents that the owner can read and write the kernel
+ * parameter using command line while other users can read it.
+ */
+bool lwis_casablanca_debug;
+module_param(lwis_casablanca_debug, bool, 0644);
+
 /* Uncomment to let kernel panic when IOMMU hits a page fault. */
 /* #define ENABLE_PAGE_FAULT_PANIC */
 
@@ -67,9 +75,10 @@ static int lwis_iommu_fault_handler(struct iommu_fault *fault, void *param)
 	of_for_each_phandle(&it, ret, lwis_dev->k_dev->of_node, "iommus", 0, 0) {
 		u64 iommus_reg;
 		const char *port_name = NULL;
+		struct device_node *iommus_info = of_node_get(it.node);
 
-		of_property_read_u64(it.node, "reg", &iommus_reg);
-		of_property_read_string(it.node, "port-name", &port_name);
+		of_property_read_u64(iommus_info, "reg", &iommus_reg);
+		of_property_read_string(iommus_info, "port-name", &port_name);
 		pr_info("Device [%s] registered IOMMUS :[%s] %#010llx.sysmmu\n", lwis_dev->name,
 			port_name, iommus_reg);
 		pr_err("\n");
@@ -226,8 +235,10 @@ int lwis_platform_update_qos(struct lwis_device *lwis_dev, int value, int32_t cl
 		exynos_pm_qos_update_request(qos_req, value);
 #endif
 
-	dev_info(lwis_dev->dev, "Updating clock for clock_family %d, freq to %u\n", clock_family,
-		 value);
+	if (lwis_casablanca_debug) {
+		dev_info(lwis_dev->dev, "Updating clock for clock_family %d, freq to %u\n",
+			 clock_family, value);
+	}
 
 	return 0;
 }
@@ -378,7 +389,7 @@ int lwis_platform_update_bts(struct lwis_device *lwis_dev, int block, unsigned i
 	ret = bts_update_bw(bts_index, bts_request);
 	if (ret < 0) {
 		dev_err(lwis_dev->dev, "Failed to update bandwidth to bts, ret: %d\n", ret);
-	} else {
+	} else if (lwis_casablanca_debug) {
 		dev_info(
 			lwis_dev->dev,
 			"Updated bandwidth to bts for device %s block %s: peak: %u, read: %u, write: %u, rt: %u\n",
@@ -391,5 +402,5 @@ int lwis_plaform_set_default_irq_affinity(unsigned int irq)
 {
 	const int cpu = 0x2;
 
-	return irq_set_affinity_hint(irq, cpumask_of(cpu));
+	return irq_set_affinity_and_hint(irq, cpumask_of(cpu));
 }

@@ -3,17 +3,12 @@
  * Google LWIS Device Tree Parser
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME "-dt: " fmt
 
 #include "lwis_dt.h"
 
-#include <linux/cleanup.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -266,7 +261,6 @@ static int parse_regulators(struct lwis_device *lwis_dev)
 			of_property_read_u32_index(dev_node, "regulator-voltages", i, &voltage);
 
 		ret = lwis_regulator_get(lwis_dev->regulators, (char *)name, voltage, dev);
-		of_node_put(dev_node_reg);
 		if (ret < 0) {
 			pr_err("Cannot find regulator: %s\n", name);
 			goto error_parse_reg;
@@ -325,7 +319,7 @@ static int parse_clocks(struct lwis_device *lwis_dev)
 		ret = of_property_read_u32_index(dev_node, "clock-rates", i, &rate);
 		rate = (ret == 0) ? rate : 0;
 
-		ret = lwis_clock_get(lwis_dev->clocks, name, dev, rate);
+		ret = lwis_clock_get(lwis_dev->clocks, (char *)name, dev, rate);
 		if (ret < 0) {
 			pr_err("Cannot find clock: %s\n", name);
 			goto error_parse_clk;
@@ -562,7 +556,7 @@ static int parse_interrupt_leaf_nodes(struct lwis_interrupt_list *list, int inde
 
 	i = 0;
 	of_for_each_phandle(&it, ret, leaf_info, "irq-leaf-nodes", 0, 0) {
-		struct device_node *irq_group_node = it.node;
+		struct device_node *irq_group_node = of_node_get(it.node);
 		int leaf_interrupts_count;
 		const char *leaf_interrupt_name;
 		int32_t *leaf_indexes = NULL;
@@ -609,9 +603,9 @@ static int parse_interrupt_leaf_nodes(struct lwis_interrupt_list *list, int inde
 		i++;
 	}
 
+	kfree(int_reg_bits);
 	return 0;
 leaf_error:
-	of_node_put(it.node);
 	lwis_interrupt_free_leaves(&list->irq[index]);
 	kfree(int_reg_bits);
 	return ret;
@@ -659,7 +653,7 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 
 	for (i = 0; i < count; ++i) {
 		of_property_read_string_index(dev_node, "interrupt-names", i, &name);
-		ret = lwis_interrupt_init(lwis_dev->irqs, i, name);
+		ret = lwis_interrupt_init(lwis_dev->irqs, i, (char *)name);
 		if (ret) {
 			pr_err("Cannot initialize irq %s\n", name);
 			goto error_get_irq;
@@ -688,7 +682,7 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 		u32 irq_reg_bitwidth = 32;
 		int32_t irq_type = REGULAR_INTERRUPT;
 		int j;
-		struct device_node *event_info = it.node;
+		struct device_node *event_info = of_node_get(it.node);
 
 		ret = of_property_read_string(event_info, "irq-reg-space", &irq_reg_space);
 		if (ret) {
@@ -798,6 +792,7 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 			}
 		}
 
+		of_node_put(event_info);
 		i++;
 	}
 
@@ -807,7 +802,6 @@ static int parse_interrupts(struct lwis_device *lwis_dev)
 
 	return 0;
 error_event_infos:
-	of_node_put(it.node);
 	/* TODO(yromanenko): lwis_interrupt_put */
 error_get_irq:
 	lwis_interrupt_list_free(lwis_dev->irqs);
@@ -845,7 +839,7 @@ static int parse_phys(struct lwis_device *lwis_dev)
 
 	for (i = 0; i < count; ++i) {
 		of_property_read_string_index(dev_node, "phy-names", i, &name);
-		ret = lwis_phy_get(lwis_dev->phys, name, dev);
+		ret = lwis_phy_get(lwis_dev->phys, (char *)name, dev);
 		if (ret < 0) {
 			pr_err("Error adding PHY[%d]\n", i);
 			goto error_parse_phy;
@@ -1017,16 +1011,11 @@ error_parse_power_seqs:
 	return ret;
 }
 
-static void lwis_of_node_put(void *node)
-{
-	of_node_put(node);
-}
-
 static int parse_unified_power_seqs(struct lwis_device *lwis_dev)
 {
 	struct device *dev;
 	struct device_node *dev_node;
-	struct device_node *dev_node_seq __free(device_node) = NULL;
+	struct device_node *dev_node_seq;
 	int count;
 	int ret = 0;
 
@@ -1060,9 +1049,9 @@ static int parse_unified_power_seqs(struct lwis_device *lwis_dev)
 		return ret;
 	}
 
-	lwis_dev->power_seq_handler = no_free_ptr(dev_node_seq);
-	return devm_add_action_or_reset(dev, lwis_of_node_put,
-					lwis_dev->power_seq_handler);
+	lwis_dev->power_seq_handler = dev_node_seq;
+
+	return ret;
 }
 
 static int parse_pm_hibernation(struct lwis_device *lwis_dev)
@@ -1369,7 +1358,6 @@ int lwis_i2c_device_parse_dt(struct lwis_i2c_device *i2c_dev)
 	}
 
 	i2c_dev->adapter = of_find_i2c_adapter_by_node(dev_node_i2c);
-	of_node_put(dev_node_i2c);
 	if (!i2c_dev->adapter) {
 		dev_err(i2c_dev->base_dev.dev, "Cannot find i2c adapter\n");
 		return -ENODEV;
@@ -1425,7 +1413,7 @@ int lwis_ioreg_device_parse_dt(struct lwis_ioreg_device *ioreg_dev)
 
 	for (i = 0; i < blocks; ++i) {
 		of_property_read_string_index(dev_node, "reg-names", i, &name);
-		ret = lwis_ioreg_get(ioreg_dev, i, name);
+		ret = lwis_ioreg_get(ioreg_dev, i, (char *)name);
 		if (ret) {
 			dev_err(ioreg_dev->base_dev.dev, "Cannot set ioreg info for %s\n", name);
 			goto error_ioreg;

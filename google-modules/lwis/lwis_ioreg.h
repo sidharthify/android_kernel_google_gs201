@@ -3,10 +3,6 @@
  * Google LWIS Register I/O Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef LWIS_IOREG_H_
@@ -33,7 +29,7 @@ void lwis_ioreg_list_free(struct lwis_ioreg_device *ioreg_dev);
 /*
  *  lwis_ioreg_get: Setup the content of a lwis_ioreg entry.
  */
-int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, const char *name);
+int lwis_ioreg_get(struct lwis_ioreg_device *ioreg_dev, int index, char *name);
 
 /*
  *  lwis_ioreg_put_by_idx: Deinitialize the content of a lwis_ioreg entry

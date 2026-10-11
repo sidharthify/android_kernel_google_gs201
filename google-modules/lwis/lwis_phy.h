@@ -3,10 +3,6 @@
  * Google LWIS PHY Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef LWIS_PHY_H_
@@ -16,7 +12,7 @@
 
 struct lwis_phy {
 	struct phy *phy;
-	const char *name;
+	char *name;
 };
 
 struct lwis_phy_list {
@@ -41,7 +37,7 @@ void lwis_phy_list_free(struct lwis_phy_list *list);
  *  lwis_phy_get: Register the PHY by name.
  *  Returns: index number (>= 0) if success, -ve if error
  */
-int lwis_phy_get(struct lwis_phy_list *list, const char *name, struct device *dev);
+int lwis_phy_get(struct lwis_phy_list *list, char *name, struct device *dev);
 
 /*
  *  lwis_phy_put_by_idx: Unregister the PHY by index.

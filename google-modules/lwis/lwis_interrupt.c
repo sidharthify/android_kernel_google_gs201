@@ -3,10 +3,6 @@
  * Google LWIS Interrupt Handler
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME "-int: " fmt
@@ -109,13 +105,14 @@ void lwis_interrupt_list_free(struct lwis_interrupt_list *list)
 	for (i = 0; i < list->count; ++i) {
 		spin_lock_irqsave(&list->irq[i].lock, flags);
 		lwis_interrupt_free_leaves(&list->irq[i]);
+		irq_set_affinity_and_hint(list->irq[i].irq, NULL);
 		free_irq(list->irq[i].irq, &list->irq[i]);
 		spin_unlock_irqrestore(&list->irq[i].lock, flags);
 	}
 	kfree(list->irq);
 }
 
-int lwis_interrupt_init(struct lwis_interrupt_list *list, int index, const char *name)
+int lwis_interrupt_init(struct lwis_interrupt_list *list, int index, char *name)
 {
 	if (!list || index < 0 || index >= list->count)
 		return -EINVAL;
@@ -170,7 +167,7 @@ int lwis_interrupt_get(struct lwis_interrupt_list *list, int index,
 	return 0;
 }
 
-int lwis_interrupt_get_gpio_irq(struct lwis_interrupt_list *list, int index, const char *name,
+int lwis_interrupt_get_gpio_irq(struct lwis_interrupt_list *list, int index, char *name,
 				int gpio_irq, int32_t irq_gpios_types)
 {
 	int ret = 0;

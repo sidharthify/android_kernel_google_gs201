@@ -1,12 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Google LWIS PHY Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME "-phy: " fmt
@@ -48,7 +44,7 @@ void lwis_phy_list_free(struct lwis_phy_list *list)
 	kfree(list);
 }
 
-int lwis_phy_get(struct lwis_phy_list *list, const char *name, struct device *dev)
+int lwis_phy_get(struct lwis_phy_list *list, char *name, struct device *dev)
 {
 	struct phy *phy;
 	int i;

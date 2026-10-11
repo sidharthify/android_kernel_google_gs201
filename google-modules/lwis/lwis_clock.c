@@ -3,10 +3,6 @@
  * Google LWIS Clock Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME "-clock: " fmt
@@ -48,8 +44,7 @@ void lwis_clock_list_free(struct lwis_clock_list *list)
 	kfree(list);
 }
 
-int lwis_clock_get(struct lwis_clock_list *list, const char *name, struct device *dev,
-		   uint32_t rate)
+int lwis_clock_get(struct lwis_clock_list *list, char *name, struct device *dev, uint32_t rate)
 {
 	struct clk *clk;
 	int i;

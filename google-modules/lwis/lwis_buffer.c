@@ -1,21 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Google LWIS DMA Buffer Utilities
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME "-buffer: " fmt
 
+#include <linux/dma-buf.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <soc/google/pt.h>
 
 #include "lwis_buffer.h"
+#include "lwis_commands.h"
 #include "lwis_device.h"
 #include "lwis_device_slc.h"
 #include "lwis_platform_dma.h"
@@ -176,6 +174,7 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 	struct lwis_buffer_enrollment_list *enrollment_list;
 	struct list_head *it_enrollment;
 	struct lwis_enrolled_buffer *old_buffer;
+	char buffer_name[LWIS_MAX_NAME_STRING_LEN];
 	char trace_name[LWIS_MAX_NAME_STRING_LEN];
 
 	if (!lwis_client) {
@@ -208,6 +207,8 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 			PTR_ERR(buffer->dma_buf));
 		return PTR_ERR(buffer->dma_buf);
 	}
+	scnprintf(buffer_name, sizeof(buffer_name), "lwis:%s", lwis_client->lwis_dev->name);
+	dma_buf_set_name(buffer->dma_buf, buffer_name);
 
 	buffer->dma_buf_attachment = dma_buf_attach(buffer->dma_buf, lwis_client->lwis_dev->k_dev);
 	if (IS_ERR_OR_NULL(buffer->dma_buf_attachment)) {
@@ -222,7 +223,7 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 		  lwis_client->lwis_dev->name);
 	LWIS_ATRACE_FUNC_BEGIN(lwis_client->lwis_dev, trace_name);
 	buffer->sg_table =
-		dma_buf_map_attachment_unlocked(buffer->dma_buf_attachment, buffer->dma_direction);
+		dma_buf_map_attachment(buffer->dma_buf_attachment, buffer->dma_direction);
 	LWIS_ATRACE_FUNC_END(lwis_client->lwis_dev, trace_name);
 	if (IS_ERR_OR_NULL(buffer->sg_table)) {
 		dev_err(lwis_client->lwis_dev->dev,
@@ -267,8 +268,8 @@ int lwis_buffer_enroll(struct lwis_client *lwis_client, struct lwis_enrolled_buf
 
 	return 0;
 err:
-	dma_buf_unmap_attachment_unlocked(buffer->dma_buf_attachment, buffer->sg_table,
-					  buffer->dma_direction);
+	dma_buf_unmap_attachment(buffer->dma_buf_attachment, buffer->sg_table,
+				 buffer->dma_direction);
 	dma_buf_detach(buffer->dma_buf, buffer->dma_buf_attachment);
 	dma_buf_put(buffer->dma_buf);
 	return -EINVAL;
@@ -294,8 +295,8 @@ int lwis_buffer_disenroll(struct lwis_client *lwis_client, struct lwis_enrolled_
 	LWIS_ATRACE_FUNC_BEGIN(lwis_client->lwis_dev, trace_name);
 	lwis_platform_dma_buffer_unmap(lwis_client->lwis_dev, buffer->dma_buf_attachment,
 				       buffer->info.dma_vaddr);
-	dma_buf_unmap_attachment_unlocked(buffer->dma_buf_attachment, buffer->sg_table,
-					  buffer->dma_direction);
+	dma_buf_unmap_attachment(buffer->dma_buf_attachment, buffer->sg_table,
+				 buffer->dma_direction);
 	dma_buf_detach(buffer->dma_buf, buffer->dma_buf_attachment);
 	dma_buf_put(buffer->dma_buf);
 	LWIS_ATRACE_FUNC_END(lwis_client->lwis_dev, trace_name);
@@ -394,11 +395,15 @@ int lwis_client_enrolled_buffers_clear(struct lwis_client *lwis_client)
 	/* Iterate over the entire hash table */
 	hash_for_each_safe(lwis_client->enrolled_buffers, i, n, enrollment_list, node) {
 		list_for_each_safe(it_enrollment, it_enrollment_tmp, &enrollment_list->list) {
+			bool done = list_is_singular(&enrollment_list->list);
 			buffer = list_entry(it_enrollment, struct lwis_enrolled_buffer, list_node);
 			/* Disenroll the buffer */
 			lwis_buffer_disenroll(lwis_client, buffer);
 			/* Free the object */
 			kfree(buffer);
+			/* Stop now if enrollment_list->list was freed */
+			if (done)
+				break;
 		}
 	}
 

@@ -1,12 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Google LWIS Regulator Interface
  *
  * Copyright (c) 2018 Google, LLC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME "-reg: " fmt
@@ -47,8 +43,8 @@ void lwis_regulator_list_free(struct lwis_regulator_list *list)
 	kfree(list);
 }
 
-int lwis_regulator_get(struct lwis_regulator_list *list, const char *name,
-		       int voltage, struct device *dev)
+int lwis_regulator_get(struct lwis_regulator_list *list, char *name, int voltage,
+		       struct device *dev)
 {
 	struct regulator *reg;
 	int i;
