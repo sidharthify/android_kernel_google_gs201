@@ -23,7 +23,7 @@
 # Path to the module source
 M ?= $(shell pwd)
 
-KBUILD_OPTIONS += BCMDHD_ROOT=$(srctree)/$(src)
+KBUILD_OPTIONS += BCMDHD_ROOT=$(src)
 -include $(KERNEL_SRC)/../private/google-modules/soc/gs/Makefile.include
 EXTRA_CFLAGS+="-Wno-missing-prototypes"
 EXTRA_CFLAGS += -fstrict-flex-arrays=0
