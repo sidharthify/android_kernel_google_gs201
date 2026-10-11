@@ -217,14 +217,9 @@ int aoc_usb_init(void)
 
 	return ret;
 }
-module_init(aoc_usb_init);
 
 void aoc_usb_exit(void)
 {
 	unregister_trace_android_vh_audio_usb_offload_connect(audio_usb_offload_connect, NULL);
 }
-module_exit(aoc_usb_exit);
 
-MODULE_DESCRIPTION("AoC ALSA Display Port Driver");
-MODULE_AUTHOR("Robert Lee <lerobert@google.com>");
-MODULE_LICENSE("GPL v2");

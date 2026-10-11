@@ -11,12 +11,8 @@
 #include <sound/pcm_params.h>
 #include <sound/control.h>
 #include <sound/soc.h>
-#include <aoc.h>
-#include <alsa/aoc_alsa.h>
-#include <alsa/aoc_alsa_drv.h>
+#include "aoc_alsa.h"
 #include "dp_audio.h"
-
-#define AOC_DISPLAYPORT_SERVICE "audio_displayport"
 
 static const struct snd_pcm_hardware snd_aoc_dp_hw = {
 	.info = (SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -33,125 +29,6 @@ static const struct snd_pcm_hardware snd_aoc_dp_hw = {
 	.periods_min = 1,
 	.periods_max = 64,
 };
-
-static int aoc_displayport_service_alloc(struct aoc_chip *chip)
-{
-	struct aoc_service_dev *dev;
-	int err = 0;
-	if (!chip)
-		return -ENODEV;
-	if (mutex_lock_interruptible(&chip->audio_cmd_chan_mutex))
-		return -EINTR;
-
-	err = alloc_aoc_audio_service(AOC_DISPLAYPORT_SERVICE, &dev, NULL, NULL);
-	if (err < 0)
-		goto error;
-
-	chip->dp_starting = 0;
-	chip->dp_dev = dev;
-error:
-	mutex_unlock(&chip->audio_cmd_chan_mutex);
-	return err;
-}
-
-static int aoc_displayport_service_free(struct aoc_chip *chip)
-{
-	struct aoc_service_dev *dev;
-	if (!chip)
-		return -ENODEV;
-	if (mutex_lock_interruptible(&chip->audio_cmd_chan_mutex))
-		return -EINTR;
-
-	chip->dp_starting = 0;
-	dev = chip->dp_dev;
-	chip->dp_dev = NULL;
-	if (dev)
-		free_aoc_audio_service(AOC_DISPLAYPORT_SERVICE, dev);
-	mutex_unlock(&chip->audio_cmd_chan_mutex);
-	return 0;
-}
-
-static int aoc_displayport_flush(struct aoc_chip *chip)
-{
-	struct aoc_service_dev *dev;
-	int err = 0;
-
-	if (!chip)
-		return -ENODEV;
-
-	dev = chip->dp_dev;
-
-	if (!dev)
-		return -EINVAL;
-
-	if (!aoc_ring_flush_read_data(dev->service, AOC_UP, 0)) {
-		dev_err(&dev->dev, "flush dp data failed\n");
-	}
-
-	return err;
-}
-
-static int aoc_displayport_read(struct aoc_chip *chip, void *dest, size_t buf_size)
-{
-	struct aoc_service_dev *dev;
-	int err = 0;
-	size_t avail;
-
-	if (!chip || !dest)
-		return -ENODEV;
-
-	dev = chip->dp_dev;
-
-	if (!dev)
-		return -EINVAL;
-
-	memset(dest, 0, buf_size);
-
-	avail = aoc_ring_bytes_available_to_read(dev->service, AOC_UP);
-
-	if (avail == 0) {
-		dev_err(&dev->dev, "ERR: no data in diaplayport read\n");
-		err = -EINVAL;
-		goto done;
-	}
-	if (chip->dp_starting == 0) {
-		if (chip->dp_start_threshold == 0) {
-			dev_warn(&dev->dev, "use default start threshold\n");
-			chip->dp_start_threshold = buf_size * 2;
-		}
-		if (avail < chip->dp_start_threshold) {
-			dev_warn(&dev->dev,
-				"Wait more dp buffer to start. avail = %zu, threshold = %zu\n",
-				avail, chip->dp_start_threshold);
-			err = -EAGAIN;
-			goto done;
-		}
-		chip->dp_starting = 1;
-	}
-
-	if (unlikely(avail < buf_size)) {
-		dev_err(&dev->dev, "ERR: overrun in displayport read. avail = %zu, toread = %zu\n",
-		       avail, buf_size);
-		err = -EAGAIN;
-		goto done;
-	}
-
-	/* Only read bytes available in the ring buffer */
-	avail = min(avail, buf_size);
-	if (!avail)
-		goto done;
-
-	err = aoc_service_read(dev, (void *)dest, avail, NONBLOCKING);
-	if (unlikely(err != avail)) {
-		dev_err(&dev->dev, "ERR: %zu bytes not read from ring buffer\n",
-		       avail - err);
-		err = -EFAULT;
-	}
-
-done:
-	return err;
-}
-
 
 static int snd_aoc_dp_open(struct snd_soc_component *component,
 	struct snd_pcm_substream *substream)
@@ -310,8 +187,20 @@ static struct platform_driver aoc_dp_drv = {
 	.probe = aoc_dp_probe,
 };
 
-module_platform_driver(aoc_dp_drv);
+int aoc_dp_init(void)
+{
+	int err;
 
-MODULE_DESCRIPTION("AoC ALSA Display Port Driver");
-MODULE_AUTHOR("Robert Lee <lerobert@google.com>");
-MODULE_LICENSE("GPL v2");
+	pr_debug("%s", __func__);
+	err = platform_driver_register(&aoc_dp_drv);
+	if (err) {
+		pr_err("error registering aoc dp drv %d\n", err);
+		return err;
+	}
+	return 0;
+}
+
+void aoc_dp_exit(void)
+{
+	platform_driver_unregister(&aoc_dp_drv);
+}

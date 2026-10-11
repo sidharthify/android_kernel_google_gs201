@@ -9,9 +9,6 @@
  * published by the Free Software Foundation.
  */
 
-#ifndef AOC_H
-#define AOC_H
-
 #include <linux/cdev.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -300,7 +297,7 @@ void trigger_aoc_ssr(bool ap_triggered_reset, char* reset_reason);
 /* Rings should have the ring flag set, slots = 1, size = ring size
  * tx/rx stats for rings are measured in bytes, otherwise msg sends
  */
-#define AOC_MAX_ENDPOINTS 96
+#define AOC_MAX_ENDPOINTS 200
 #define AOC_ENDPOINT_NONE 0xffffffff
 
 /* Offset from the beginning of the DRAM region for the firmware to be stored */
@@ -354,4 +351,3 @@ enum AOC_FIRMWARE_INFORMATION {
 	module_driver(__aoc_driver, aoc_driver_register, aoc_driver_unregister)
 
 #endif /* __KERNEL__ */
-#endif /* AOC_H */

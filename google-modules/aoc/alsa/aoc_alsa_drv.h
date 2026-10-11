@@ -16,7 +16,7 @@
 #define pr_fmt(fmt) "alsa: " fmt
 
 #include <linux/poll.h>
-#include <aoc.h>
+#include "aoc.h"
 
 typedef enum {
     AOC_SERVICE_EVENT_DOWN = 0,

@@ -12,7 +12,6 @@
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/uio.h>
 #include <linux/version.h>
 
 #include "aoc_alsa.h"
@@ -232,6 +231,14 @@ static int aoc_compr_prepare(struct aoc_alsa_stream *alsa_stream)
 	int err;
 	struct snd_compr_stream *cstream = alsa_stream->cstream;
 	struct aoc_service_dev *dev = alsa_stream->dev;
+
+	if (cstream->direction == SND_COMPRESS_PLAYBACK) {
+		/*
+		 * Reset write pointer to ensure writing to the base of the ring.
+		 * AoC requires this to allow DMA transfers to be aligned correctly.
+		 */
+		aoc_ring_reset_write_pointer(dev->service, AOC_DOWN);
+	}
 
 	/* No prepare() for compress offload, so do buffer flushing here */
 	err = aoc_compr_offload_flush_buffer(alsa_stream);
@@ -636,18 +643,13 @@ static int aoc_compr_playback_copy(struct snd_compr_stream *cstream,
 {
 	struct snd_compr_runtime *runtime = cstream->runtime;
 	struct aoc_alsa_stream *alsa_stream = runtime->private_data;
-	int err;
-	struct iov_iter iter;
-
-	err = import_ubuf(ITER_SOURCE, buf, count, &iter);
-	if (err)
-		return err;
+	int err = 0;
 
 	err = aoc_compr_offload_send_metadata(alsa_stream);
 	if (err < 0)
 		pr_err("ERR: %d failed to send metadata\n", err);
 
-	err = aoc_audio_write(alsa_stream, &iter, count);
+	err = aoc_audio_write(alsa_stream, buf, count);
 	if (err < 0) {
 		pr_err("ERR:%d failed to write to buffer\n", err);
 		return err;

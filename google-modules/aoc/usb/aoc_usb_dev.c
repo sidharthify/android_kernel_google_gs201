@@ -6,7 +6,6 @@
 
 #define pr_fmt(fmt) "aoc_usb_control: " fmt
 
-#include <linux/cleanup.h>
 #include <linux/device.h>
 #include <linux/init.h>
 #include <linux/jiffies.h>
@@ -321,7 +320,7 @@ static int aoc_usb_match(struct device *dev, void *data)
 
 static bool aoc_usb_is_hcd_working(void)
 {
-	struct device_node *np __free(device_node);
+	struct device_node *np;
 	struct platform_device *pdev;
 	struct device *udev;
 	int ret;

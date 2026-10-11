@@ -72,10 +72,6 @@ static const uint32_t tx_ep_list[] = {
 	IDX_EP7_TX,     /* reserved */
 };
 
-static const struct snd_soc_dai_ops aoc_dai_ops = {
-	.compress_new = aoc_compress_new,
-};
-
 static struct snd_soc_dai_driver aoc_dai_drv[] = {
 	/* FE dai */
 	{
@@ -186,7 +182,7 @@ static struct snd_soc_dai_driver aoc_dai_drv[] = {
 			.channels_min = 1,
 			.channels_max = 2,
 		},
-		.ops = &aoc_dai_ops,
+		.compress_new = aoc_compress_new,
 		.name = "EP7 PB",
 		.id = IDX_EP7_RX,
 	},
@@ -1248,7 +1244,7 @@ static int aoc_path_put(uint32_t ep_id, uint32_t hw_id,
 		return -EINVAL;
 	}
 
-	pr_info("%s: set ep %u hw_id 0x%x enable %d chip %p", __func__, ep_idx,
+	pr_debug("%s: set ep %u hw_id 0x%x enable %d chip %p", __func__, ep_idx,
 		hw_idx, enable, chip);
 
 	mutex_lock(&path_mutex);

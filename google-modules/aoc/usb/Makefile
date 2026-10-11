@@ -3,7 +3,7 @@
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 M ?= $(shell pwd)
 
-KBUILD_OPTIONS	+= CONFIG_AOC_USB=m
+KBUILD_OPTIONS	+= CONFIG_AOC_DRIVER=m
 
 EXTRA_SYMBOLS	+= $(OUT_DIR)/../private/google-modules/aoc/Module.symvers
 EXTRA_SYMBOLS	+= $(OUT_DIR)/../private/google-modules/aoc/alsa/Module.symvers
