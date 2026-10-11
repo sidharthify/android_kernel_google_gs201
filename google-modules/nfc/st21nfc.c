@@ -719,6 +719,7 @@ static unsigned int st21nfc_poll(struct file *file, poll_table *wait)
 
 static const struct file_operations st21nfc_dev_fops = {
 	.owner = THIS_MODULE,
+	.llseek = no_llseek,
 	.read = st21nfc_dev_read,
 	.write = st21nfc_dev_write,
 	.open = st21nfc_dev_open,
@@ -882,7 +883,8 @@ static const struct acpi_gpio_mapping acpi_st21nfc_gpios[] = {
 	{ "clkreq-gpios", &clkreq_gpios, 1},
 };
 
-static int st21nfc_probe(struct i2c_client *client)
+static int st21nfc_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	int ret;
 	struct st21nfc_device *st21nfc_dev;
