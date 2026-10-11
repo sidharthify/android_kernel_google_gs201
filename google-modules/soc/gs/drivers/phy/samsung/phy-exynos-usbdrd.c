@@ -1988,12 +1988,26 @@ static int exynos_usbdrd_phy_power_off(struct phy *phy)
 	return 0;
 }
 
+/* S2MPU control register; clearing ENABLE lets all traffic through */
+#define S2MPU_REG_NS_CTRL0	0x0
+
+/*
+ * Called once HSI0 is powered (exynos-pd power_on_post, dwc3 probe).
+ * Under pKVM the hypervisor configures the HSI0 S2MPU. Without it, nothing
+ * does, and the S2MPU comes out of every HSI0 power-up blocking all DMA:
+ * the controller enumerates but its event writes never reach memory
+ * ("unknown endpoint event 0"). Switch it to pass-through instead.
+ */
 int exynos_usbdrd_s2mpu_manual_control(bool on)
 {
 	struct exynos_usbdrd_phy *phy_drd;
 
-	if (!IS_ENABLED(CONFIG_PKVM_S2MPU))
+	if (!IS_ENABLED(CONFIG_PKVM_S2MPU)) {
+		phy_drd = exynos_usbdrd_get_struct();
+		if (on && phy_drd && phy_drd->s2mpu_base)
+			writel(0, phy_drd->s2mpu_base + S2MPU_REG_NS_CTRL0);
 		return 0;
+	}
 
 	pr_debug("%s s2mpu = %d\n", __func__, on);
 
@@ -2159,6 +2173,20 @@ static int exynos_usbdrd_phy_probe(struct platform_device *pdev)
 	dev_set_drvdata(dev, phy_drd);
 	phy_drd->dev = dev;
 	phy_drd->s2mpu = s2mpu;
+
+	if (!IS_ENABLED(CONFIG_PKVM_S2MPU)) {
+		struct device_node *s2mpu_np __free(device_node) =
+			of_parse_phandle(dev->of_node, "s2mpu", 0);
+
+		if (s2mpu_np) {
+			phy_drd->s2mpu_base = devm_of_iomap(dev, s2mpu_np, 0, NULL);
+			if (IS_ERR(phy_drd->s2mpu_base)) {
+				dev_err(dev, "failed to map s2mpu (%ld)\n",
+					PTR_ERR(phy_drd->s2mpu_base));
+				phy_drd->s2mpu_base = NULL;
+			}
+		}
+	}
 
 	match = of_match_node(exynos_usbdrd_phy_of_match, pdev->dev.of_node);
 

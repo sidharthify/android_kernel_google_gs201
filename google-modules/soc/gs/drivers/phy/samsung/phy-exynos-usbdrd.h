@@ -208,6 +208,7 @@ struct exynos_usbdrd_phy {
 	struct notifier_block usb_nb;
 	struct notifier_block usb_host_nb;
 	struct device *s2mpu;
+	void __iomem *s2mpu_base; /* only used without pKVM */
 
 	/* eom related parameters */
 	struct usb_eom_result_s *eom_result;
