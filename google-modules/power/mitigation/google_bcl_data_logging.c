@@ -8,7 +8,11 @@
 
 #include <linux/threads.h>
 #include <linux/time.h>
+#if IS_ENABLED(CONFIG_REGULATOR_S2MPG14)
 #include <soc/google/odpm.h>
+#elif IS_ENABLED(CONFIG_REGULATOR_S2MPG12) || IS_ENABLED(CONFIG_REGULATOR_S2MPG10)
+#include <soc/google/odpm-whi.h>
+#endif
 #include <uapi/linux/sched/types.h>
 #include "bcl.h"
 

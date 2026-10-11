@@ -134,7 +134,7 @@ static int get_modem_gpio1(void *data, u64 *val)
 {
 	struct bcl_device *bcl_dev = data;
 
-	*val = gpiod_get_raw_value(bcl_dev->modem_gpio1_pin);
+	*val = gpio_get_value(bcl_dev->modem_gpio1_pin);
 	return 0;
 }
 
@@ -142,7 +142,7 @@ static int set_modem_gpio1(void *data, u64 val)
 {
 	struct bcl_device *bcl_dev = data;
 
-	gpiod_set_raw_value(bcl_dev->modem_gpio1_pin, val);
+	gpio_set_value(bcl_dev->modem_gpio1_pin, val);
 	return 0;
 }
 
@@ -150,7 +150,7 @@ static int get_modem_gpio2(void *data, u64 *val)
 {
 	struct bcl_device *bcl_dev = data;
 
-	*val = gpiod_get_raw_value(bcl_dev->modem_gpio2_pin);
+	*val = gpio_get_value(bcl_dev->modem_gpio2_pin);
 	return 0;
 }
 
@@ -158,7 +158,7 @@ static int set_modem_gpio2(void *data, u64 val)
 {
 	struct bcl_device *bcl_dev = data;
 
-	gpiod_set_raw_value(bcl_dev->modem_gpio2_pin, val);
+	gpio_set_value(bcl_dev->modem_gpio2_pin, val);
 	return 0;
 }
 
