@@ -33,6 +33,7 @@
 
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
+#include <linux/pinctrl/consumer.h>
 
 #include <linux/uaccess.h>
 
