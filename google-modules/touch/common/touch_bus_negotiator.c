@@ -570,20 +570,15 @@ static void tbn_remove(struct platform_device *pdev)
 	if (tbn == NULL)
 		return;
 
-	if (tbn->mode == TBN_MODE_GPIO) {
-		free_irq(tbn->aoc2ap_irq, tbn);
-		if (gpio_is_valid(tbn->ap2aoc_gpio))
-			gpio_free(tbn->ap2aoc_gpio);
-		if (gpio_is_valid(tbn->aoc2ap_gpio))
-			gpio_free(tbn->aoc2ap_gpio);
+	/* The GPIOs and the aoc2ap IRQ are devm-managed; devres frees them. */
 #if IS_ENABLED(CONFIG_TOUCHSCREEN_TBN_AOC_CHANNEL_MODE)
-	} else if (tbn->mode == TBN_MODE_AOC_CHANNEL) {
+	if (tbn->mode == TBN_MODE_AOC_CHANNEL) {
 		if (!IS_ERR(tbn->aoc_channel_task))
 			kthread_stop(tbn->aoc_channel_task);
 		if (tbn->event_wq)
 			destroy_workqueue(tbn->event_wq);
-#endif
 	}
+#endif
 
 	devm_kfree(dev, tbn);
 	tbn_context = NULL;
