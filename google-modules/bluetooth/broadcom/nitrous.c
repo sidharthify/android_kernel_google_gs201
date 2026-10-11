@@ -74,7 +74,8 @@ struct nitrous_bt_lpm {
 #define PROC_BTWAKE	0
 #define PROC_LPM	1
 #define PROC_BTWRITE	2
-#define PROC_TIMESYNC	3
+#define PROC_WAKELOCK	3
+#define PROC_TIMESYNC	4
 #define PROC_DIR	"bluetooth/sleep"
 struct proc_dir_entry *bluetooth_dir, *sleep_dir;
 
@@ -177,14 +178,9 @@ static irqreturn_t ntirous_timesync_isr(int irq, void *data)
 	struct nitrous_bt_lpm *lpm = data;
 	ktime_t timestamp;
 	dev_dbg(lpm->dev, "Timesync IRQ: %u\n", gpiod_get_value(lpm->gpio_timesync));
-	if (unlikely(lpm->rfkill_blocked)) {
-		dev_err(lpm->dev, "Unexpected Timesync IRQ\n");
-		return IRQ_HANDLED;
-	}
-
 	timestamp = ktime_get_boottime();
 	kfifo_in(&lpm->timestamp_queue, &timestamp, sizeof(ktime_t));
-	logbuffer_log(lpm->log, "Timesync: %lld\n", ktime_to_us(timestamp));
+	logbuffer_log(lpm->log, "Timesync: %lld", ktime_to_us(timestamp));
 	return IRQ_HANDLED;
 }
 
@@ -292,6 +288,10 @@ static int nitrous_proc_show(struct seq_file *m, void *v)
 			timestamp = 0;
 		seq_printf(m, "%lld", ktime_to_us(timestamp));
 		break;
+	case PROC_WAKELOCK:
+		dev_info(lpm->dev, "%s: current rx wakelock time: %d\n", __func__, lpm->wakelock_ctrl);
+		seq_printf(m, "%d\n", lpm->wakelock_ctrl);
+		break;
 	default:
 		return 0;
 	}
@@ -309,13 +309,15 @@ static ssize_t nitrous_proc_write(struct file *file, const char *buf,
 	struct nitrous_lpm_proc *data = pde_data(file_inode(file));
 	struct nitrous_bt_lpm *lpm = data->lpm;
 	struct timespec64 ts;
-	char lbuf[4];
-	int rc;
+	char lbuf[6];
+	int rc, value;
 
 	if (count >= sizeof(lbuf))
 		count = sizeof(lbuf) - 1;
 	if (copy_from_user(lbuf, buf, count))
 		return -EFAULT;
+        /* Null-terminate the string */
+        lbuf[count] = '\0';
 
 	switch (data->operation) {
 	case PROC_LPM:
@@ -355,6 +357,15 @@ static ssize_t nitrous_proc_write(struct file *file, const char *buf,
 			nitrous_prepare_uart_tx_locked(lpm, false);
 		}
 		break;
+	case PROC_WAKELOCK:
+		rc = kstrtoint(lbuf, 10, &value); // Convert string to integer
+		if (rc) {
+			dev_err(lpm->dev, "Invalid integer input\n");
+			return -EINVAL;
+		}
+		lpm->wakelock_ctrl = value;
+		dev_info(lpm->dev, "%s: set wakelock_ctrl: %d\n", __func__, value);
+		break;
 	default:
 		return 0;
 	}
@@ -384,7 +395,9 @@ static void nitrous_lpm_remove_proc_entries(struct nitrous_bt_lpm *lpm)
 		remove_proc_entry("btwake", sleep_dir);
 		remove_proc_entry("sleep", bluetooth_dir);
 	}
-
+	if (lpm->wakelock_ctrl) {
+		remove_proc_entry("wakelock_ctrl", bluetooth_dir);
+	}
 	if (lpm->timesync_state) {
 		remove_proc_entry("timesync", bluetooth_dir);
 	}
@@ -395,9 +408,26 @@ static void nitrous_lpm_remove_proc_entries(struct nitrous_bt_lpm *lpm)
 	}
 }
 
+static void toggle_timesync(struct nitrous_bt_lpm *lpm) {
+	int rc;
+
+	if (lpm->timesync_state == TIMESYNC_NOT_SUPPORTED)
+		return;
+	rc = devm_request_irq(lpm->dev, lpm->irq_timesync, ntirous_timesync_isr,
+			IRQF_TRIGGER_RISING, "bt_timesync", lpm);
+	if (unlikely(rc)) {
+		lpm->timesync_state = TIMESYNC_SUPPORTED;
+		dev_logbuffer_logk(lpm->dev, lpm->log, LOGLEVEL_ERR, "Unable to request IRQ for bt_timesync GPIO");
+	} else {
+		lpm->timesync_state = TIMESYNC_ENABLED;
+		logbuffer_log(lpm->log, "Rquest IRQ for bt_timesync GPIO successful");
+	}
+}
+
+
 static int nitrous_lpm_init(struct nitrous_bt_lpm *lpm)
 {
-	int rc, proc_size = 3;
+	int rc, proc_size = 4;
 	unsigned long fifo_size = 0;
 	struct proc_dir_entry *entry;
 	struct nitrous_lpm_proc *data;
@@ -480,18 +510,33 @@ static int nitrous_lpm_init(struct nitrous_bt_lpm *lpm)
 		goto fail;
 	}
 
+	if (lpm->wakelock_ctrl) {
+		/* read/write proc entries "wakelock_ctrl" */
+		data[3].operation = PROC_WAKELOCK;
+		data[3].lpm = lpm;
+		entry = proc_create_data("wakelock_ctrl", (S_IRUSR | S_IRGRP | S_IWUSR),
+								 sleep_dir, &nitrous_proc_readwrite_fops, data + 3);
+		if (entry == NULL) {
+			dev_err(lpm->dev, "Unable to create /proc/%s/wakelock_ctrl entry", PROC_DIR);
+			logbuffer_log(lpm->log, "Unable to create /proc/%s/wakelock_ctrl entry", PROC_DIR);
+			rc = -ENOMEM;
+			goto fail;
+		}
+	}
+
 	if (lpm->timesync_state) {
 		/* read/write proc entries "timesync" */
-		data[3].operation = PROC_TIMESYNC;
-		data[3].lpm = lpm;
+		data[4].operation = PROC_TIMESYNC;
+		data[4].lpm = lpm;
 		entry = proc_create_data("timesync", (S_IRUSR | S_IRGRP),
-				bluetooth_dir, &nitrous_proc_read_fops, data + 3);
+				bluetooth_dir, &nitrous_proc_read_fops, data + 4);
 		if (entry == NULL) {
 			dev_err(lpm->dev, "Unable to create /proc/bluetooth/timesync entry");
 			logbuffer_log(lpm->log, "Unable to create /proc/bluetooth/timesync entry");
 			rc = -ENOMEM;
 			goto fail;
 		}
+		toggle_timesync(lpm);
 	}
 
 	return 0;
@@ -511,28 +556,6 @@ static void nitrous_lpm_cleanup(struct nitrous_bt_lpm *lpm)
 	}
 
 	nitrous_lpm_remove_proc_entries(lpm);
-}
-
-static void toggle_timesync(struct nitrous_bt_lpm *lpm, bool enable) {
-	int rc;
-
-	if (!lpm || lpm->timesync_state == TIMESYNC_NOT_SUPPORTED)
-		return;
-	if (enable) {
-		rc = devm_request_irq(lpm->dev, lpm->irq_timesync, ntirous_timesync_isr,
-				IRQF_TRIGGER_RISING, "bt_timesync", lpm);
-		if (unlikely(rc)) {
-			lpm->timesync_state = TIMESYNC_SUPPORTED;
-			dev_err(lpm->dev, "Unable to request IRQ for bt_timesync GPIO\n");
-			logbuffer_log(lpm->log, "Unable to request IRQ for bt_timesync GPIO");
-		} else {
-			lpm->timesync_state = TIMESYNC_ENABLED;
-		}
-	} else {
-		if (lpm->timesync_state != TIMESYNC_ENABLED)
-			return;
-		devm_free_irq(lpm->dev, lpm->irq_timesync, lpm);
-	}
 }
 
 /*
@@ -618,8 +641,6 @@ static int nitrous_rfkill_set_power(void *data, bool blocked)
 		exynos_update_ip_idle_status(lpm->idle_bt_rx_ip_index, STATUS_IDLE);
 	}
 	lpm->rfkill_blocked = blocked;
-
-	toggle_timesync(lpm, !blocked);
 
 	/* wait for device to power cycle and come out of reset */
 	usleep_range(10000, 20000);
@@ -781,12 +802,13 @@ err_lpm_init:
 	return rc;
 }
 
-static void nitrous_remove(struct platform_device *pdev)
+static int nitrous_remove(struct platform_device *pdev)
 {
 	struct nitrous_bt_lpm *lpm = platform_get_drvdata(pdev);
 
-	if (!lpm)
-		return;
+	if (!lpm) {
+		return -EINVAL;
+	}
 
 	logbuffer_log(lpm->log, "removing");
 	nitrous_rfkill_cleanup(lpm);
@@ -796,6 +818,7 @@ static void nitrous_remove(struct platform_device *pdev)
 
 	devm_kfree(&pdev->dev, lpm);
 
+	return 0;
 }
 
 static int nitrous_suspend_device(struct device *dev)
@@ -880,6 +903,7 @@ static struct of_device_id nitrous_match_table[] = {
 	{ .compatible = "goog,nitrous" },
 	{}
 };
+MODULE_DEVICE_TABLE(of, nitrous_match_table);
 
 static const struct dev_pm_ops nitrous_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(nitrous_suspend, nitrous_resume)
