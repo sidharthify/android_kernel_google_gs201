@@ -35,6 +35,9 @@
 	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
+	cs-gpios = <&gpp26 3 GPIO_ACTIVE_LOW>;
+	num-cs = <1>;
+
 	dw3xxx_prod@0 {
 		compatible = "decawave,dw3000";
 		reg = <0>;
@@ -46,7 +49,7 @@
 		pinctrl-0 = <&spi16_cs &dw3xxx_irq &dw3xxx_ap_rst>;
 		spi-max-frequency = <40000000>;
 
-		uwbhal,reset-gpio = <&aoc_gpiochip 0 GPIO_OPEN_DRAIN>;
+		uwbhal,reset-gpio = <&aoc_gpiochip 0 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
 		power_reg_2p5-supply = <&s_ldo16_reg>;
 		power_reg_1p8-supply = <&s_ldo17_reg>;
 
@@ -57,9 +60,6 @@
 
 		status = "okay";
 
-		controller-data {
-			cs-gpio = <&gpp26 3 GPIO_ACTIVE_HIGH>;
-		};
 	};
 };
 
