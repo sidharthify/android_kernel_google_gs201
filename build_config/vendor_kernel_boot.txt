@@ -18,7 +18,6 @@ samsung-dma.ko
 dss.ko
 debug-snapshot-debug-kinfo.ko
 ehld.ko
-exynos-debug-test.ko
 pixel-debug-test.ko
 itmon.ko
 exynos-coresight.ko
@@ -48,14 +47,12 @@ exynos-pd.ko
 exynos-pd-dbg.ko
 exynos-pd_el3.ko
 exynos-pd_hsi0.ko
-s2mpu-passthrough.ko
 exynos-pm.ko
 exynos-cpupm.ko
 ect_parser.ko
 gs_acpm.ko
 acpm_flexpmu_dbg.ko
 power_stats.ko
-acpm_mbox_test.ko
 exynos-dm.ko
 exynos_pm_qos.ko
 slc_pt.ko
@@ -93,8 +90,6 @@ sscoredump.ko
 s2mpg1x-gpio.ko
 s2mpg12-mfd.ko
 s2mpg13-mfd.ko
-deferred-free-helper.ko
-page_pool.ko
 samsung_dma_heap.ko
 ufs-exynos-gs.ko
 spi-s3c64xx.ko
@@ -129,11 +124,9 @@ exynos-acme.ko
 exynos_mct.ko
 exynos_devfreq.ko
 gs_perf_mon.ko
-governor_memlat.ko
-memlat-devfreq.ko
-arm-memlat-mon.ko
 gs_governor_utils.ko
 bts.ko
+audiometrics.ko
 zram_gs.ko
 zcomp_cpu.ko
 zcomp_eh.ko
@@ -183,7 +176,6 @@ google_bcl.ko
 pixel-reboot.ko
 trusty-core.ko
 trusty-log.ko
-trusty-test.ko
 trusty-virtio.ko
 trusty-ipc.ko
 snd-soc-cs35l41.ko
@@ -205,4 +197,13 @@ cp_thermal_zone.ko
 touch_bus_negotiator.ko
 heatmap.ko
 touch_offload.ko
-audiometrics.ko
+acpm_mbox_test.ko
+arm-memlat-mon.ko
+coresight.ko
+deferred-free-helper.ko
+exynos-debug-test.ko
+governor_memlat.ko
+memlat-devfreq.ko
+page_pool.ko
+s2mpu-passthrough.ko
+trusty-test.ko
