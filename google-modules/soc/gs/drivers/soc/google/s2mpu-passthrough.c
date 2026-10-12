@@ -36,6 +36,8 @@
 struct s2mpu_passthrough {
 	void __iomem *base;
 	struct notifier_block nb;
+	bool powered;	/* the domain is on */
+	bool sleeping;	/* between suspend_late and resume_early */
 };
 
 static int s2mpu_passthrough_genpd_event(struct notifier_block *nb, unsigned long action,
@@ -43,9 +45,22 @@ static int s2mpu_passthrough_genpd_event(struct notifier_block *nb, unsigned lon
 {
 	struct s2mpu_passthrough *s = container_of(nb, struct s2mpu_passthrough, nb);
 
-	/* sent once the domain is fully powered and its secure state restored */
-	if (action == GENPD_NOTIFY_ON)
-		writel(0, s->base + S2MPU_REG_NS_CTRL0);
+	switch (action) {
+	case GENPD_NOTIFY_ON:
+		/*
+		 * Sent once the domain is fully powered and its secure state
+		 * restored. During system resume the domain comes back in the
+		 * noirq phase, where touching the S2MPU raises an SError, so
+		 * leave that to resume_early.
+		 */
+		s->powered = true;
+		if (!READ_ONCE(s->sleeping))
+			writel(0, s->base + S2MPU_REG_NS_CTRL0);
+		break;
+	case GENPD_NOTIFY_OFF:
+		s->powered = false;
+		break;
+	}
 
 	return NOTIFY_OK;
 }
@@ -76,6 +91,8 @@ static int s2mpu_passthrough_probe(struct platform_device *pdev)
 	if (!s->base)
 		return -ENOMEM;
 
+	platform_set_drvdata(pdev, s);
+	s->powered = true;	/* until the put below powers it off */
 	s->nb.notifier_call = s2mpu_passthrough_genpd_event;
 	ret = dev_pm_genpd_add_notifier(dev, &s->nb);
 	if (ret)
@@ -97,6 +114,33 @@ static int s2mpu_passthrough_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int s2mpu_passthrough_suspend_late(struct device *dev)
+{
+	struct s2mpu_passthrough *s = dev_get_drvdata(dev);
+
+	if (s)
+		WRITE_ONCE(s->sleeping, true);
+	return 0;
+}
+
+static int s2mpu_passthrough_resume_early(struct device *dev)
+{
+	struct s2mpu_passthrough *s = dev_get_drvdata(dev);
+
+	if (!s)
+		return 0;
+	/* the same point pKVM's S2MPU driver restores its S2MPUs at */
+	if (s->powered)
+		writel(0, s->base + S2MPU_REG_NS_CTRL0);
+	WRITE_ONCE(s->sleeping, false);
+	return 0;
+}
+
+static const struct dev_pm_ops s2mpu_passthrough_pm_ops = {
+	LATE_SYSTEM_SLEEP_PM_OPS(s2mpu_passthrough_suspend_late,
+				 s2mpu_passthrough_resume_early)
+};
+
 static const struct of_device_id s2mpu_passthrough_of_match[] = {
 	{ .compatible = "google,s2mpu" },
 	{},
@@ -108,6 +152,7 @@ static struct platform_driver s2mpu_passthrough_driver = {
 	.driver = {
 		.name = "s2mpu-passthrough",
 		.of_match_table = s2mpu_passthrough_of_match,
+		.pm = pm_sleep_ptr(&s2mpu_passthrough_pm_ops),
 	},
 };
 module_platform_driver(s2mpu_passthrough_driver);
