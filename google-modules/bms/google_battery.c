@@ -11281,6 +11281,7 @@ static enum power_supply_property gbatt_battery_props[] = {
 	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,		/* 23 */
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
+	POWER_SUPPLY_PROP_VOLTAGE_AVG, // child: max1720x_battery.c
 
 	/*  hard limit to 26 */
 };
@@ -11794,6 +11795,24 @@ static int gbatt_gbms_get_property(struct power_supply *psy,
 	 */
 	case GBMS_PROP_CHARGE_CHARGER_STATE:
 		val->int64val = batt_drv->chg_state.v;
+		break;
+
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
+		mutex_lock(&batt_drv->chg_lock);
+		val->prop.intval = batt_drv->cc_max;
+		mutex_unlock(&batt_drv->chg_lock);
+		break;
+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
+		mutex_lock(&batt_drv->chg_lock);
+		val->prop.intval = batt_drv->fv_uv;
+		mutex_unlock(&batt_drv->chg_lock);
+		break;
+
+	case POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT:
+		if (batt_drv->topoff)
+			val->prop.intval = batt_drv->topoff;
+		else
+			val->prop.intval = -1;
 		break;
 
 	default:
