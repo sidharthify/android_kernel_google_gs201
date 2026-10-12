@@ -243,11 +243,11 @@ static bool dit_hal_set_data_limit(struct forward_stats *stats,
 
 	spin_lock_irqsave(&dhc->stats_lock, flags);
 	if (stats) {
-		strscpy(dhc->stats.iface, stats->iface, sizeof(dhc->stats.iface));
+		strlcpy(dhc->stats.iface, stats->iface, IFNAMSIZ);
 		dhc->stats.data_warning = DIT_HAL_STATS_MAX;
 		dhc->stats.data_limit = stats->data_limit;
 	} else {
-		strscpy(dhc->stats.iface, limit->iface, sizeof(dhc->stats.iface));
+		strlcpy(dhc->stats.iface, limit->iface, IFNAMSIZ);
 		dhc->stats.data_warning = limit->data_warning;
 		dhc->stats.data_limit = limit->data_limit;
 	}
@@ -323,8 +323,7 @@ static int dit_hal_add_dst_iface(bool is_upstream,
 		if (dhc->dst_iface[i].iface_set)
 			continue;
 
-		strscpy(dhc->dst_iface[i].iface, info->iface,
-			sizeof(dhc->dst_iface[i].iface));
+		strlcpy(dhc->dst_iface[i].iface, info->iface, IFNAMSIZ);
 		dhc->dst_iface[i].netdev =
 			dev_get_by_name(&init_net, info->iface);
 		if (dhc->dst_iface[i].netdev)

@@ -4,11 +4,8 @@
  *
  */
 
-#include <linux/cleanup.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
-#include <net/netdev_rx_queue.h>
-#include <net/rps.h>
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "modem_ctrl.h"
@@ -444,7 +441,7 @@ static void tpmon_set_rps(struct tpmon_data *data)
 #endif
 	struct io_device *iod;
 	unsigned int num_queue = 1;
-	unsigned int i;
+	unsigned int i, len;
 	u32 val, *rxq_mask;
 
 	if (!data->enable)
@@ -474,9 +471,11 @@ static void tpmon_set_rps(struct tpmon_data *data)
 			continue;
 
 		for (i = 0; i < num_queue; i++) {
-			snprintf(mask, MAX_RPS_STRING, "%x", rxq_mask[i]);
+			len = scnprintf(mask, MAX_RPS_STRING, "%x",
+					rxq_mask[i]);
 
-			ret = (int)tpmon_store_rps_map(&iod->ndev->_rx[i], mask, strlen(mask));
+			ret = (int)tpmon_store_rps_map(&iod->ndev->_rx[i],
+					mask, len);
 			if (ret < 0) {
 				mif_err("tpmon_store_rps_map() error:%d\n", ret);
 				goto out;
@@ -492,9 +491,9 @@ static void tpmon_set_rps(struct tpmon_data *data)
 		dev_hold(iod->clat_ndev);
 		spin_unlock_irqrestore(&iod->clat_lock, flags);
 
-		snprintf(mask, MAX_RPS_STRING, "%x", val);
+		len = scnprintf(mask, MAX_RPS_STRING, "%x", val);
 		ret = (int)tpmon_store_rps_map(&(iod->clat_ndev->_rx[0]),
-			mask, strlen(mask));
+			mask, len);
 		dev_put(iod->clat_ndev);
 
 		if (ret < 0) {
@@ -711,7 +710,7 @@ static void tpmon_set_cpu_freq(struct tpmon_data *data)
 static int tpmon_cpufreq_nb(struct notifier_block *nb,
 		unsigned long event, void *arg)
 {
-	struct cpufreq_policy *policy = (struct cpufreq_policy *)arg;
+	struct cpufreq_policy *policy = arg;
 	struct cpif_tpmon *tpmon = &_tpmon;
 	struct tpmon_data *data;
 
@@ -1266,8 +1265,7 @@ static ssize_t use_user_level_show(struct device *dev,
 {
 	struct cpif_tpmon *tpmon = &_tpmon;
 
-	return scnprintf(buf, PAGE_SIZE, "use_user_level:%d\n",
-		tpmon->use_user_level);
+	return sysfs_emit(buf, "use_user_level:%d\n", tpmon->use_user_level);
 }
 
 static ssize_t use_user_level_store(struct device *dev,
@@ -1302,8 +1300,7 @@ static ssize_t debug_print_show(struct device *dev,
 {
 	struct cpif_tpmon *tpmon = &_tpmon;
 
-	return scnprintf(buf, PAGE_SIZE,
-		"debug pring enable:%d\n", tpmon->debug_print);
+	return sysfs_emit(buf, "debug pring enable:%d\n", tpmon->debug_print);
 }
 
 static ssize_t debug_print_store(struct device *dev,
@@ -1533,7 +1530,9 @@ static int tpmon_set_target(struct tpmon_data *data)
 
 static int tpmon_parse_dt(struct device_node *np, struct cpif_tpmon *tpmon)
 {
-	struct device_node *tpmon_np __free(device_node);
+	struct device_node *tpmon_np = NULL;
+	struct device_node *child_np = NULL;
+	struct device_node *boost_np = NULL;
 	struct tpmon_data *data = NULL;
 	int ret = 0;
 	u32 count = 0;
@@ -1563,7 +1562,7 @@ static int tpmon_parse_dt(struct device_node *np, struct cpif_tpmon *tpmon)
 	mif_dt_read_u32(tpmon_np, "boost_hold_msec", tpmon->boost_hold_msec);
 	mif_info("boost hold:%dmsec\n", tpmon->boost_hold_msec);
 
-	for_each_child_of_node_scoped(tpmon_np, child_np) {
+	for_each_child_of_node(tpmon_np, child_np) {
 		struct tpmon_data child_data = {};
 
 		mif_dt_read_string(child_np, "boost_name", child_data.name);
@@ -1573,8 +1572,32 @@ static int tpmon_parse_dt(struct device_node *np, struct cpif_tpmon *tpmon)
 		mif_dt_count_u32_array(child_np, "level",
 			child_data.level, child_data.num_level);
 
+		/*
+		 * Block specific tpmon features without modifying DTBO. Add a
+		 * build-time assertion to catch when a new tpmon target is
+		 * added, so we'll know about it and block it too if needed.
+		 */
+		BUILD_BUG_ON(MAX_TPMON_TARGET != 17);
+		switch (child_data.target) {
+		case TPMON_TARGET_RPS:
+		case TPMON_TARGET_MIF:
+		case TPMON_TARGET_IRQ_MBOX:
+		case TPMON_TARGET_IRQ_PCIE:
+		case TPMON_TARGET_IRQ_DIT:
+		case TPMON_TARGET_INT_FREQ:
+		case TPMON_TARGET_CPU_CL0:
+		case TPMON_TARGET_CPU_CL1:
+		case TPMON_TARGET_CPU_CL2:
+		case TPMON_TARGET_MIF_MAX:
+		case TPMON_TARGET_INT_FREQ_MAX:
+		case TPMON_TARGET_CPU_CL0_MAX:
+		case TPMON_TARGET_CPU_CL1_MAX:
+		case TPMON_TARGET_CPU_CL2_MAX:
+			continue;
+		}
+
 		/* boost */
-		for_each_child_of_node_scoped(child_np, boost_np) {
+		for_each_child_of_node(child_np, boost_np) {
 			if (count >= MAX_TPMON_DATA) {
 				mif_err("count is full:%d\n", count);
 				return -EINVAL;

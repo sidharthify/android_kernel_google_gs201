@@ -46,7 +46,7 @@ static ssize_t cp_temp_store(struct device *dev, struct device_attribute *attr, 
 		return -EINVAL;
 	}
 
-	if (index > temp_manager->num_sensors) {
+	if (index >= temp_manager->num_sensors) {
 		dev_err(dev, "Invalid CP temperature sensor index - %d", index);
 		return -EINVAL;
 	}
@@ -80,7 +80,7 @@ static const struct attribute_group cp_temp_group = {
 static int cp_sensor_get_temp(struct thermal_zone_device *tz, int *temp)
 {
 	int ret = 0;
-	struct cp_temp_sensor *s = thermal_zone_device_priv(tz);
+	struct cp_temp_sensor *s = tz->devdata;
 
 	if (s && s->valid)
 		*temp = s->temp;
@@ -137,6 +137,11 @@ fail:
 	return ret;
 }
 
+static int cp_thermal_zone_remove(struct platform_device *pdev)
+{
+	return 0;
+}
+
 static const struct of_device_id cp_thermal_zone_match[] = {
 	{
 		.compatible = "google,gs101-cp-thermal",
@@ -152,6 +157,7 @@ static struct platform_driver cp_thermal_zone_driver = {
 		.of_match_table = of_match_ptr(cp_thermal_zone_match),
 	},
 	.probe = cp_thermal_zone_probe,
+	.remove = cp_thermal_zone_remove,
 };
 module_platform_driver(cp_thermal_zone_driver);
 

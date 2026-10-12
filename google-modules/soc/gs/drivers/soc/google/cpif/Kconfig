@@ -2,6 +2,7 @@
 menuconfig EXYNOS_MODEM_IF
 	tristate "Samsung Mobile CP Interface"
 	default n
+	depends on GOOGLE_MODEMCTL
 	help
 	  Samsung Dual Modem Interface Driver
 
@@ -19,7 +20,6 @@ config SEC_MODEM_S5000AP
 
 config SEC_MODEM_S5100
 	tristate "Exynos S51xx"
-	select BOOT_DEVICE_SPI
 	select LINK_DEVICE_PCIE
 	select CPIF_PAGE_RECYCLING
 	default n
@@ -107,7 +107,7 @@ config MODEM_IF_LEGACY_QOS
 	help
 	  This enables QoS for legacy buffer model
 
-config SUSPEND_DURING_VOICE_CALL
+config CPIF_AP_SUSPEND_DURING_VOICE_CALL
 	bool "control wake_lock by voice call start/end notification"
 	depends on LINK_DEVICE_PCIE
 	default n

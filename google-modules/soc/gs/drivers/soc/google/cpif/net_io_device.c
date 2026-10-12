@@ -22,7 +22,7 @@
 #include <linux/netdevice.h>
 #include <net/tcp.h>
 
-#include <soc/google/exynos-modem-ctrl.h>
+#include "exynos-modem-ctrl.h"
 
 #include "modem_prj.h"
 #include "modem_utils.h"
@@ -98,8 +98,8 @@ static netdev_tx_t vnet_xmit(struct sk_buff *skb, struct net_device *ndev)
 	struct sk_buff *skb_new = skb;
 	char *buff;
 	int ret;
-	u8 cfg = 0;
-	u16 cfg_sit = 0;
+	u8 __maybe_unused cfg;
+	u16 __maybe_unused cfg_sit;
 	unsigned int headroom;
 	unsigned int tailroom;
 	unsigned int tx_bytes;
@@ -361,5 +361,5 @@ void vnet_setup(struct net_device *ndev)
 	ndev->tx_queue_len = 1000;
 	ndev->mtu = ETH_DATA_LEN;
 	ndev->watchdog_timeo = 5 * HZ;
-	ndev->features |= NETIF_F_GRO;
+	ndev->features |= (NETIF_F_GRO | NETIF_F_GRO_UDP_FWD);
 }

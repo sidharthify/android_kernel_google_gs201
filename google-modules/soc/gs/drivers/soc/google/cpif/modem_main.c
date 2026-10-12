@@ -6,7 +6,6 @@
  *
  */
 
-#include <linux/cleanup.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -34,13 +33,19 @@
 #include <uapi/linux/in.h>
 #include <linux/inet.h>
 #include <net/ipv6.h>
+#include <soc/google/exynos-modem-ctrl.h>
+#include <soc/google/modem_notifier.h>
 
-#if IS_ENABLED(CONFIG_LINK_DEVICE_SHMEM)
-#include <soc/google/shm_ipc.h>
-#include <soc/google/mcu_ipc.h>
+#if IS_ENABLED(CONFIG_S5910)
+#include <linux/s5910.h>
 #endif
 
-#include <soc/google/exynos-modem-ctrl.h>
+#if IS_ENABLED(CONFIG_LINK_DEVICE_SHMEM)
+#include <linux/shm_ipc.h>
+#include "mcu_ipc.h"
+#endif
+
+#include "exynos-modem-ctrl.h"
 #include "modem_prj.h"
 #include "modem_variation.h"
 #include "modem_utils.h"
@@ -313,6 +318,9 @@ static int parse_dt_common_pdata(struct device_node *np,
 	mif_dt_read_u32_noerr(np, "mif,cp2ap_active_not_alive", pdata->cp2ap_active_not_alive);
 	mif_info("cp2ap_active_not_alive:%d\n", pdata->cp2ap_active_not_alive);
 
+	mif_dt_read_u32_noerr(np, "mif_off_during_volte", pdata->mif_off_during_volte);
+	mif_info("mif_off_during_volte:%d\n", pdata->mif_off_during_volte);
+
 	return 0;
 }
 
@@ -482,7 +490,9 @@ static int parse_dt_ipc_region_pdata(struct device *dev, struct device_node *np,
 static int parse_dt_iodevs_pdata(struct device *dev, struct device_node *np,
 				 struct modem_data *pdata)
 {
-	for_each_child_of_node_scoped(np, child) {
+	struct device_node *child = NULL;
+
+	for_each_child_of_node(np, child) {
 		struct modem_io_t *p_iod = NULL;
 		struct modem_io_t *iod;
 		unsigned int ch_count = 0;
@@ -529,10 +539,10 @@ static int parse_dt_iodevs_pdata(struct device *dev, struct device_node *np,
 			}
 
 			if (ch_count < iod->ch_count) {
-				snprintf(iod->name, sizeof(iod->name), "%s%d", name, ch_count);
+				scnprintf(iod->name, sizeof(iod->name), "%s%d", name, ch_count);
 				iod->ch = p_iod->ch + ch_count;
 			} else {
-				snprintf(iod->name, sizeof(iod->name), "%s", name);
+				scnprintf(iod->name, sizeof(iod->name), "%s", name);
 			}
 
 			pdata->iodevs[pdata->num_iodevs] = iod;
@@ -548,7 +558,7 @@ static int parse_dt_iodevs_pdata(struct device *dev, struct device_node *np,
 static struct modem_data *modem_if_parse_dt_pdata(struct device *dev)
 {
 	struct modem_data *pdata;
-	struct device_node *iodevs_node __free(device_node) = NULL;
+	struct device_node *iodevs_node = NULL;
 
 	pdata = devm_kzalloc(dev, sizeof(struct modem_data), GFP_KERNEL);
 	if (!pdata) {
@@ -616,7 +626,7 @@ enum mif_sim_mode {
 
 static int simslot_count(struct seq_file *m, void *v)
 {
-	enum mif_sim_mode mode = (enum mif_sim_mode)m->private;
+	enum mif_sim_mode mode = (enum mif_sim_mode)(uintptr_t)(m->private);
 
 	seq_printf(m, "%u\n", mode);
 	return 0;
@@ -627,7 +637,7 @@ static int simslot_count_open(struct inode *inode, struct file *file)
 	return single_open(file, simslot_count, pde_data(inode));
 }
 
-static const struct file_operations simslot_count_fops = {
+static const struct file_operations __maybe_unused simslot_count_fops = {
 	.open	= simslot_count_open,
 	.read	= seq_read,
 	.llseek	= seq_lseek,
@@ -681,7 +691,7 @@ static enum mif_sim_mode get_sim_mode(struct device_node *of_node)
 static ssize_t do_cp_crash_store(struct device *dev, struct device_attribute *attr,
 		const char *buf, size_t count)
 {
-	modem_force_crash_exit_ext();
+	modem_force_crash_exit_ext(buf);
 
 	return count;
 }
@@ -691,7 +701,7 @@ static ssize_t modem_state_show(struct device *dev,
 {
 	struct modem_ctl *mc = dev_get_drvdata(dev);
 
-	return scnprintf(buf, PAGE_SIZE, "%s\n", cp_state_str(mc->phone_state));
+	return sysfs_emit(buf, "%s\n", cp_state_str(mc->phone_state));
 }
 
 static DEVICE_ATTR_WO(do_cp_crash);
@@ -714,7 +724,7 @@ static int cpif_cdev_alloc_region(struct modem_data *pdata, struct modem_shared 
 		return ret;
 	}
 
-	msd->cdev_class = class_create("cpif");
+	msd->cdev_class = class_create(THIS_MODULE, "cpif");
 	if (IS_ERR(msd->cdev_class)) {
 		mif_err("class_create() failed:%ld\n", PTR_ERR(msd->cdev_class));
 		ret = -ENOMEM;
@@ -781,6 +791,28 @@ static int cpif_probe(struct platform_device *pdev)
 		mif_err("Failed to register logbuffer!\n");
 		modemctl->log = NULL;
 	}
+
+#if IS_ENABLED(CONFIG_S5910)
+	/* get the s5910 node pointer */
+	modemctl->s5910_dev = NULL;
+	if (dev->of_node) {
+		struct device_node *np;
+		struct device *dp;
+		struct device_link *link;
+
+		np = of_parse_phandle(dev->of_node, "google,clk-buffer", 0);
+		if (np) {
+			dp = s5910_get_device(np);
+			if (dp) {
+				modemctl->s5910_dev = dp;
+				link = device_link_add(dev, dp, 0);
+				if (link)
+					mif_info("%s s5910 linked\n",
+							pdata->name);
+			}
+		}
+	}
+#endif
 
 	if (toe_dev_create(pdev)) {
 		mif_err("%s: toe dev not created\n", pdata->name);
@@ -909,17 +941,20 @@ static void cpif_shutdown(struct platform_device *pdev)
 
 static int modem_suspend(struct device *pdev)
 {
+	int ret = 0;
 	struct modem_ctl *mc = dev_get_drvdata(pdev);
 
 	if (mc->ops.suspend)
-		mc->ops.suspend(mc);
+		ret = mc->ops.suspend(mc);
 
+	if (!ret) {
 #if defined(CPIF_WAKEPKT_SET_MARK)
-	atomic_set(&mc->mark_skb_wakeup, 1);
+		atomic_set(&mc->mark_skb_wakeup, 1);
 #endif
-	set_wakeup_packet_log(true);
+		set_wakeup_packet_log(true);
+	}
 
-	return 0;
+	return ret;
 }
 
 static int modem_resume(struct device *pdev)

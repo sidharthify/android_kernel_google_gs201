@@ -85,14 +85,12 @@ static unsigned int ipc_poll(struct file *filp, struct poll_table_struct *wait)
 	struct io_device *iod = (struct io_device *)filp->private_data;
 	struct modem_ctl *mc;
 	struct sk_buff_head *rxq;
-	struct link_device *ld;
 
 	if (!iod)
 		return POLLERR;
 
 	mc = iod->mc;
 	rxq = &iod->sk_rx_q;
-	ld = get_current_link(iod);
 
 	if (skb_queue_empty(rxq))
 		poll_wait(filp, &iod->wq, wait);
@@ -204,6 +202,24 @@ static long ipc_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (ret)
 			mif_err("IOCTL_GET_OPENED_STATUS error: %d\n", ret);
 		return ret;
+
+	case IOCTL_LOAD_GNSS_IMAGE:
+		if (!ld->load_gnss_image) {
+			mif_err("%s: load_gnss_image is null\n", iod->name);
+			return -EINVAL;
+		}
+
+		mif_info("%s: IOCTL_LOAD_GNSS_IMAGE\n", iod->name);
+		return ld->load_gnss_image(ld, iod, arg);
+
+	case IOCTL_READ_GNSS_IMAGE:
+		if (!ld->read_gnss_image) {
+			mif_err("%s: read_gnss_image is null\n", iod->name);
+			return -EINVAL;
+		}
+
+		mif_info("%s: IOCTL_READ_GNSS_IMAGE\n", iod->name);
+		return ld->read_gnss_image(ld, iod, arg);
 
 	default:
 		 /* If you need to handle the ioctl for specific link device,

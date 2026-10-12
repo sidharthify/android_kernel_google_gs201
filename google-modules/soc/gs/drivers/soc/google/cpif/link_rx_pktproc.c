@@ -10,7 +10,7 @@
 #include <net/ip6_checksum.h>
 #include <net/udp.h>
 #include <net/tcp.h>
-#include <soc/google/shm_ipc.h>
+#include <linux/shm_ipc.h>
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "link_device_memory.h"
@@ -1066,7 +1066,7 @@ out:
  */
 static void pktproc_perftest_napi_schedule(void *arg)
 {
-	struct pktproc_queue *q = (struct pktproc_queue *)arg;
+	struct pktproc_queue *q = arg;
 
 	if (!q) {
 		mif_err_limited("q is null\n");
@@ -1138,7 +1138,7 @@ static unsigned int pktproc_perftest_gen_rx_packet_sktbuf_mode(
 
 static int pktproc_perftest_thread(void *arg)
 {
-	struct mem_link_device *mld = (struct mem_link_device *) arg;
+	struct mem_link_device *mld = arg;
 	struct pktproc_adaptor *ppa = &mld->pktproc;
 	struct pktproc_queue *q = ppa->q[0];
 	struct pktproc_perftest *perf = &ppa->perftest;
@@ -1358,7 +1358,7 @@ poll_exit:
  */
 static irqreturn_t pktproc_irq_handler(int irq, void *arg)
 {
-	struct pktproc_queue *q = (struct pktproc_queue *)arg;
+	struct pktproc_queue *q = arg;
 
 	if (!q) {
 		mif_err_limited("q is null\n");
@@ -1727,6 +1727,8 @@ static int pktproc_get_info(struct pktproc_adaptor *ppa, struct device_node *np)
 	case PKTPROC_V2:
 		mif_dt_read_u32(np, "pktproc_dl_desc_mode", ppa->desc_mode);
 		mif_dt_read_u32(np, "pktproc_dl_num_queue", ppa->num_queue);
+		if (ppa->num_queue > PKTPROC_MAX_QUEUE)
+			ppa->num_queue = PKTPROC_MAX_QUEUE;
 #if IS_ENABLED(CONFIG_EXYNOS_CPIF_IOMMU)
 		mif_dt_read_u32(np, "pktproc_dl_use_netrx_mng", ppa->use_netrx_mng);
 		mif_dt_read_u32(np, "pktproc_dl_netrx_capacity", ppa->netrx_capacity);
@@ -1914,9 +1916,8 @@ int pktproc_create(struct platform_device *pdev, struct mem_link_device *mld,
 
 		mif_info("Create queue %d\n", i);
 
-		ppa->q[i] = kzalloc(sizeof(struct pktproc_queue), GFP_ATOMIC);
+		ppa->q[i] = kzalloc(sizeof(*ppa->q[i]), GFP_ATOMIC);
 		if (ppa->q[i] == NULL) {
-			mif_err_limited("kzalloc() error %d\n", i);
 			ret = -ENOMEM;
 			goto create_error;
 		}

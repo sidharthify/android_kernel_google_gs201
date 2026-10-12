@@ -2155,7 +2155,7 @@ static ssize_t debug_use_tx_store(struct device *dev, struct device_attribute *a
 static ssize_t debug_use_tx_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "use_tx: %d\n", dc->use_dir[DIT_DIR_TX]);
+	return sysfs_emit(buf, "use_tx: %d\n", dc->use_dir[DIT_DIR_TX]);
 }
 
 static ssize_t debug_use_rx_store(struct device *dev, struct device_attribute *attr,
@@ -2175,7 +2175,7 @@ static ssize_t debug_use_rx_store(struct device *dev, struct device_attribute *a
 static ssize_t debug_use_rx_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "use_rx: %d\n", dc->use_dir[DIT_DIR_RX]);
+	return sysfs_emit(buf, "use_rx: %d\n", dc->use_dir[DIT_DIR_RX]);
 }
 
 static ssize_t debug_use_clat_store(struct device *dev, struct device_attribute *attr,
@@ -2208,7 +2208,7 @@ static ssize_t debug_use_clat_store(struct device *dev, struct device_attribute 
 static ssize_t debug_use_clat_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "use_clat: %d\n", dc->use_clat);
+	return sysfs_emit(buf, "use_clat: %d\n", dc->use_clat);
 }
 
 static ssize_t debug_hal_support_store(struct device *dev, struct device_attribute *attr,
@@ -2228,14 +2228,14 @@ static ssize_t debug_hal_support_store(struct device *dev, struct device_attribu
 static ssize_t debug_hal_support_show(struct device *dev, struct device_attribute *attr,
 				      char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "hal_support: %d\n", dc->hal_support);
+	return sysfs_emit(buf, "hal_support: %d\n", dc->hal_support);
 }
 #endif
 
 #if defined(DIT_DEBUG_LOW)
 static ssize_t debug_pktgen_ch_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "pktgen ch: %d\n", dc->pktgen_ch);
+	return sysfs_emit(buf, "pktgen ch: %d\n", dc->pktgen_ch);
 }
 
 static ssize_t debug_pktgen_ch_store(struct device *dev,
@@ -2694,9 +2694,9 @@ static int dit_probe(struct platform_device *pdev)
 	return dit_create(pdev);
 }
 
-static void dit_remove(struct platform_device *pdev)
+static int dit_remove(struct platform_device *pdev)
 {
-	return;
+	return 0;
 }
 
 static int dit_suspend(struct device *dev)

@@ -4,7 +4,7 @@
  *
  */
 
-#include <soc/google/exynos-modem-ctrl.h>
+#include "exynos-modem-ctrl.h"
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "link_device_memory.h"
@@ -156,8 +156,9 @@ static ssize_t zmc_count_show(struct device *dev,
 
 	modem = (struct modem_data *)dev->platform_data;
 
-	return scnprintf(buf, PAGE_SIZE, "memcpy_packet(%d)/zeromemcpy_packet(%d)\n",
-			modem->mld->memcpy_packet_count, modem->mld->zeromemcpy_packet_count);
+	return sysfs_emit(buf, "memcpy_packet(%d)/zeromemcpy_packet(%d)\n",
+			modem->mld->memcpy_packet_count,
+			modem->mld->zeromemcpy_packet_count);
 }
 
 static ssize_t zmc_count_store(struct device *dev,
@@ -186,8 +187,9 @@ static ssize_t mif_buff_mng_show(struct device *dev,
 	if (!g_mif_buff_mng)
 		return 0;
 
-	return scnprintf(buf, PAGE_SIZE, "used(%d)/free(%d)/total(%d)\n",
-			g_mif_buff_mng->used_cell_count, g_mif_buff_mng->free_cell_count,
+	return sysfs_emit(buf, "used(%d)/free(%d)/total(%d)\n",
+			g_mif_buff_mng->used_cell_count,
+			g_mif_buff_mng->free_cell_count,
 			g_mif_buff_mng->cell_count);
 }
 
@@ -197,7 +199,7 @@ static ssize_t force_use_memcpy_show(struct device *dev,
 	struct modem_data *modem;
 
 	modem = (struct modem_data *)dev->platform_data;
-	return scnprintf(buf, PAGE_SIZE, "%d\n", modem->mld->force_use_memcpy);
+	return sysfs_emit(buf, "%d\n", modem->mld->force_use_memcpy);
 }
 
 static ssize_t force_use_memcpy_store(struct device *dev,

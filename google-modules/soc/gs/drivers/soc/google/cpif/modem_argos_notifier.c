@@ -138,11 +138,10 @@ static void mif_update_ndevs_rps(const char *ndev_prefix, unsigned int rps_value
 	if (!rps_value)
 		return;
 
-	snprintf(value, MIF_MAX_RPS_STR, "%x", rps_value);
+	scnprintf(value, MIF_MAX_RPS_STR, "%x", rps_value);
 
 	for (i = 0; i < MIF_MAX_NDEV_NUM; i++) {
-		memset(ndev_name, 0, IFNAMSIZ);
-		snprintf(ndev_name, IFNAMSIZ, "%s%d", ndev_prefix, i);
+		scnprintf(ndev_name, IFNAMSIZ, "%s%d", ndev_prefix, i);
 
 		ndev = dev_get_by_name(&init_net, ndev_name);
 		if (!ndev) {

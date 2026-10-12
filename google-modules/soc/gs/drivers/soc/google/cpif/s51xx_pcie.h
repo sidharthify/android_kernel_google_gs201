@@ -50,7 +50,7 @@ struct s51xx_pcie {
 extern int exynos_pcie_rc_chk_link_status(int ch_num);
 extern int exynos_pcie_rc_l1ss_ctrl(int enable, int id, int ch_num);
 
-extern int exynos_pcie_poweron(int ch_num, int spd);
+extern int exynos_pcie_poweron(int ch_num, int spd, int width);
 extern int exynos_pcie_poweroff(int ch_num);
 extern void exynos_pcie_set_perst_gpio(int ch_num, bool on);
 extern void exynos_pcie_set_ready_cto_recovery(int ch_num);
@@ -59,6 +59,7 @@ extern void exynos_pcie_set_ready_cto_recovery(int ch_num);
 extern int register_separated_msi_vector(int ch_num,
 					 irq_handler_t handler, void *context,
 					 int *irq_num);
+extern int exynos_pcie_set_msi_ctrl_addr(int num, u64 msi_ctrl_addr);
 
 #define AUTOSUSPEND_TIMEOUT	200
 
@@ -75,7 +76,7 @@ int s51xx_pcie_request_msi_int(struct pci_dev *pdev, int int_num);
 void __iomem *s51xx_pcie_get_doorbell_address(void);
 int s51xx_pcie_send_doorbell_int(struct pci_dev *pdev, int int_num);
 void s51xx_pcie_save_state(struct pci_dev *pdev);
-void s51xx_pcie_restore_state(struct pci_dev *pdev);
+void s51xx_pcie_restore_state(struct pci_dev *pdev, bool boot_on);
 int s51xx_check_pcie_link_status(int ch_num);
 void s51xx_pcie_l1ss_ctrl(int enable, int ch_num);
 void disable_msi_int(struct pci_dev *pdev);

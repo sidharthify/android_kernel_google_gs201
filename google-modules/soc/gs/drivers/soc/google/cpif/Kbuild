@@ -5,16 +5,10 @@ ccflags-y += -Wformat
 ccflags-y += -Wformat-zero-length
 ccflags-y += -DCPIF_WAKEPKT_SET_MARK=0x80000000
 ccflags-y += -DCONFIG_OPTION_REGION=\"$(PROJECT_REGION)\"
-CFLAGS_cpif_tp_monitor.o += -Wno-missing-prototypes
-CFLAGS_link_device.o += -Wno-missing-prototypes
-CFLAGS_modem_ctrl.o += -Wno-missing-prototypes
-CFLAGS_modem_ctrl_s5100.o += -Wno-missing-prototypes
-CFLAGS_modem_dump.o += -Wno-missing-prototypes
-CFLAGS_modem_variation.o += -Wno-missing-prototypes
-CFLAGS_s51xx_pcie.o += -Wno-missing-prototypes
 # This gives the drivers access to the logbuffer interface
 subdir-ccflags-y += -I$(KERNEL_SRC)/../private/google-modules/bms
-subdir-ccflags-y += -I$(src)
+subdir-ccflags-y += -I$(srctree)/$(src)
+include $(srctree)/google-modules/soc/gs/Makefile.include
 
 obj-$(CONFIG_MCU_IPC) += mcu_ipc.o
 obj-$(CONFIG_SHM_IPC) += shm_ipc.o
@@ -33,7 +27,7 @@ cpif-y += modem_main.o modem_variation.o
 cpif-y += modem_io_device.o net_io_device.o bootdump_io_device.o ipc_io_device.o modem_toe_device.o
 cpif-y += modem_utils.o modem_dump.o
 cpif-y += link_device.o link_device_memory_flow_control.o
-cpif-y += link_device_memory_debug.o modem_notifier.o
+cpif-y += link_device_memory_debug.o
 cpif-y += link_device_memory_snapshot.o link_device_memory_legacy.o
 
 cpif-$(CONFIG_LINK_DEVICE_WITH_SBD_ARCH) += link_device_memory_sbd.o

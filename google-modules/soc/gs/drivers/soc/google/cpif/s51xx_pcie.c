@@ -26,7 +26,6 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/pci.h>
-#include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/pm_runtime.h>
 //#include <sound/samsung/abox.h>
@@ -38,25 +37,6 @@
 #include "modem_utils.h"
 #include "modem_ctrl.h"
 #include "s51xx_pcie.h"
-
-static int s51xx_pcie_read_procmem(struct seq_file *m, void *v)
-{
-	mif_info("Procmem READ!\n");
-
-	return 0;
-}
-
-static int s51xx_pcie_proc_open(struct inode *inode, struct  file *file)
-{
-	return single_open(file, s51xx_pcie_read_procmem, NULL);
-}
-
-static const struct proc_ops s51xx_pcie_proc_fops = {
-	.proc_open = s51xx_pcie_proc_open,
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = single_release,
-};
 
 void s51xx_pcie_chk_ep_conf(struct pci_dev *pdev)
 {
@@ -233,7 +213,7 @@ void s51xx_pcie_save_state(struct pci_dev *pdev)
 		mif_err("Can't set D3 state!!!!\n");
 }
 
-void s51xx_pcie_restore_state(struct pci_dev *pdev)
+void s51xx_pcie_restore_state(struct pci_dev *pdev, bool boot_on)
 {
 	struct s51xx_pcie *s51xx_pcie = pci_get_drvdata(pdev);
 	int ret;
@@ -272,6 +252,14 @@ void s51xx_pcie_restore_state(struct pci_dev *pdev)
 
 	/* DBG: print out EP config values after restore_state */
 	s51xx_pcie_chk_ep_conf(pdev);
+
+	if (boot_on) {
+		/* Disable L1.2 after PCIe power on when booting */
+		s51xx_pcie_l1ss_ctrl(0, s51xx_pcie->pcie_channel_num);
+	} else {
+		/* Enable L1.2 after PCIe power on */
+		s51xx_pcie_l1ss_ctrl(1, s51xx_pcie->pcie_channel_num);
+	}
 
 	/* BAR0 value correction  */
 	pci_read_config_dword(pdev, PCI_BASE_ADDRESS_0, &val);
@@ -354,11 +342,11 @@ static void s51xx_pcie_event_cb(struct exynos_pcie_notify *noti)
 
 		if (mc->pcie_linkdown_retry_cnt++ < 10) {
 			mif_err("[%d] retry pcie poweron !!!\n", mc->pcie_linkdown_retry_cnt);
-			queue_work_on(2, mc->wakeup_wq, &mc->wakeup_work);
+			queue_work(mc->wakeup_wq, &mc->wakeup_work);
 		} else {
 			mif_err("[%d] force crash !!!\n", mc->pcie_linkdown_retry_cnt);
 			exynos_pcie_rc_dump_all_status(mc->pcie_ch_num);
-			s5100_force_crash_exit_ext();
+			s5100_force_crash_exit_ext(CRASH_REASON_PCIE_LINKDOWN_ERROR);
 		}
 	} else if (event & EXYNOS_PCIE_EVENT_CPL_TIMEOUT) {
 		mif_err("s51xx CPL_TIMEOUT notification callback function!!!\n");
@@ -366,27 +354,19 @@ static void s51xx_pcie_event_cb(struct exynos_pcie_notify *noti)
 
 		if (mc->pcie_cto_retry_cnt++ < 10) {
 			mif_err("[%d] retry pcie poweron !!!\n", mc->pcie_cto_retry_cnt);
-			queue_work_on(2, mc->wakeup_wq, &mc->wakeup_work);
+			queue_work(mc->wakeup_wq, &mc->wakeup_work);
 		} else {
 			mif_err("[%d] force crash !!!\n", mc->pcie_cto_retry_cnt);
 			exynos_pcie_rc_dump_all_status(mc->pcie_ch_num);
-			s5100_force_crash_exit_ext();
+			s5100_force_crash_exit_ext(CRASH_REASON_PCIE_CPL_TIMEOUT_ERROR);
 		}
+
+	} else if (event & EXYNOS_PCIE_EVENT_LINKDOWN_RECOVERY_FAIL) {
+                        mif_err("Link Down recovery fail force crash !!!\n");
+                        s5100_force_crash_exit_ext(CRASH_REASON_PCIE_LINKDOWN_RECOVERY_FAILURE);
 	}
 }
-#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE_IOMMU)
-int s51xx_pcie_sysmmu_fault_notifier(struct notifier_block *nb, unsigned long action,
-				     void *nb_data)
-{
-	pr_err("CPIF : SysMMU fault notifier -> Crash dump!\n");
-	s5100_force_crash_exit_ext();
 
-	return 0;
-}
-
-extern int pcie_sysmmu_register_fault_handler(struct notifier_block *pcie_sysmmu_nb,
-					      int hsi_block_num);
-#endif
 static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	int ret;
@@ -401,9 +381,7 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 	struct resource *tmp_rsc;
 	int resno = PCI_BRIDGE_MEM_WINDOW;
 	u32 val, db_addr;
-#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE_IOMMU)
-	static struct notifier_block sysmmu_fault_notifier;
-#endif
+
 	dev_info(dev, "%s EP driver Probe(%s), chNum: %d\n",
 			driver->name, __func__, mc->pcie_ch_num);
 
@@ -432,7 +410,6 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 	for (i = 0; i < 6; i++) {
 		pdev->resource[i].start = 0x0;
 		pdev->resource[i].end = 0x0;
-		pdev->resource[i].flags = 0x82000000;
 		if (pci_assign_resource(pdev, i))
 			pr_warn("%s: failed to assign pci resource (i=%d)\n", __func__, i);
 	}
@@ -440,7 +417,6 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 	/* EP BAR setup: BAR0 (4kB) */
 	pdev->resource[0].start = val;
 	pdev->resource[0].end = val + SZ_4K;
-	pdev->resource[0].flags = 0x82000000;
 	if (pci_assign_resource(pdev, 0))
 		pr_warn("%s: failed to assign EP BAR0 pci resource\n", __func__);
 
@@ -467,9 +443,9 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 	if (s51xx_pcie->doorbell_addr == NULL)
 		mif_err("Can't ioremap doorbell address!!!\n");
 
-	mif_info("Register PCIE notification LINKDOWN and CPL_TIMEOUT events...\n");
+	mif_info("Register PCIE notification LINKDOWN, CPL_TIMEOUT and LINKDOWN_RECOVERY_FAIL events...\n");
 	s51xx_pcie->pcie_event.events =
-		EXYNOS_PCIE_EVENT_LINKDOWN | EXYNOS_PCIE_EVENT_CPL_TIMEOUT;
+		EXYNOS_PCIE_EVENT_LINKDOWN | EXYNOS_PCIE_EVENT_CPL_TIMEOUT | EXYNOS_PCIE_EVENT_LINKDOWN_RECOVERY_FAIL;
 	s51xx_pcie->pcie_event.user = pdev;
 	s51xx_pcie->pcie_event.mode = EXYNOS_PCIE_TRIGGER_CALLBACK;
 	s51xx_pcie->pcie_event.callback = s51xx_pcie_event_cb;
@@ -477,15 +453,13 @@ static int s51xx_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *en
 
 	mif_info("Enable PCI device...\n");
 	ret = pci_enable_device(pdev);
+	if (ret < 0) {
+		mif_err("pci_enable_device() failed, rc:%d\n", ret);
+	}
 
 	pci_set_master(pdev);
 
 	pci_set_drvdata(pdev, s51xx_pcie);
-
-#if IS_ENABLED(CONFIG_LINK_DEVICE_PCIE_IOMMU)
-	sysmmu_fault_notifier.notifier_call = s51xx_pcie_sysmmu_fault_notifier;
-	pcie_sysmmu_register_fault_handler(&sysmmu_fault_notifier, mc->pcie_ch_num + 1);
-#endif
 
 	return 0;
 }
@@ -556,17 +530,17 @@ static struct pci_driver s51xx_driver = {
  */
 int s51xx_pcie_init(struct modem_ctl *mc)
 {
-	int ch_num = mc->pcie_ch_num;
 	int ret;
+	int ch_num = mc->pcie_ch_num;
 
 	mif_info("Register PCIE drvier for s51xx.(chNum: %d, mc: 0x%p)\n", ch_num, mc);
 
 	mc->pci_driver = s51xx_driver;
 
 	ret = pci_register_driver(&mc->pci_driver);
-
-	/* Create PROC fs */
-	proc_create("driver/s51xx_pcie_proc", 0, NULL, &s51xx_pcie_proc_fops);
+	if (ret < 0) {
+		mif_err("pci_register_driver() failed, rc:%d\n", ret);
+	}
 
 	return 0;
 }

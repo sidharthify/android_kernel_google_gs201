@@ -10,8 +10,8 @@
  *
  */
 
-#include <soc/google/exynos-modem-ctrl.h>
-#include <soc/google/shm_ipc.h>
+#include "exynos-modem-ctrl.h"
+#include <linux/shm_ipc.h>
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "link_device_memory.h"

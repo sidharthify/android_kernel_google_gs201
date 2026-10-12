@@ -4,7 +4,6 @@
  *
  */
 
-#include <linux/cleanup.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
 #include <linux/module.h>
@@ -14,7 +13,7 @@
 #include <linux/slab.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/of_fdt.h>
-#include <soc/google/shm_ipc.h>
+#include <linux/shm_ipc.h>
 
 #include "modem_utils.h"
 
@@ -36,7 +35,7 @@ static struct cp_reserved_mem _cp_rmem[MAX_CP_RMEM];
 #if defined(MODULE)
 static int cp_rmem_setup_latecall(struct platform_device *pdev)
 {
-	struct device_node *np __free(device_node) = NULL;
+	struct device_node *np;
 	struct reserved_mem *rmem;
 	u32 rmem_index = 0;
 	int i;
@@ -49,8 +48,6 @@ static int cp_rmem_setup_latecall(struct platform_device *pdev)
 		mif_dt_read_u32(np, "rmem_index", rmem_index);
 
 		rmem = of_reserved_mem_lookup(np);
-		of_node_put(np);
-		np = NULL;
 		if (!rmem) {
 			mif_err("of_reserved_mem_lookup() failed\n");
 			break;
@@ -118,7 +115,8 @@ static struct cp_shared_mem _cp_shmem[MAX_CP_NUM][MAX_CP_SHMEM];
 
 static int cp_shmem_setup(struct device *dev)
 {
-	struct device_node *regions __free(device_node) = NULL;
+	struct device_node *regions = NULL;
+	struct device_node *child = NULL;
 	u32 cp_num;
 	u32 shmem_index, rmem_index;
 	u32 offset;
@@ -132,7 +130,7 @@ static int cp_shmem_setup(struct device *dev)
 		return -EINVAL;
 	}
 
-	for_each_child_of_node_scoped(regions, child) {
+	for_each_child_of_node(regions, child) {
 		if (count >= MAX_CP_SHMEM) {
 			mif_err("_cp_shmem is full for %d\n", count);
 			return -ENOMEM;
@@ -498,6 +496,11 @@ fail:
 	return ret;
 }
 
+static int cp_shmem_remove(struct platform_device *pdev)
+{
+	return 0;
+}
+
 static const struct of_device_id cp_shmem_dt_match[] = {
 	{ .compatible = "samsung,exynos-cp-shmem", },
 	{},
@@ -506,6 +509,7 @@ MODULE_DEVICE_TABLE(of, cp_shmem_dt_match);
 
 static struct platform_driver cp_shmem_driver = {
 	.probe = cp_shmem_probe,
+	.remove = cp_shmem_remove,
 	.driver = {
 		.name = "cp_shmem",
 		.owner = THIS_MODULE,

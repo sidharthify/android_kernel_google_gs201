@@ -12,16 +12,16 @@
 #include <linux/delay.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
-#include <linux/modem_notifier.h>
-#include <soc/google/mcu_ipc.h>
-#include <soc/google/shm_ipc.h>
+#include "mcu_ipc.h"
+#include <linux/shm_ipc.h>
 #include <soc/google/cal-if.h>
-#include <soc/google/exynos-modem-ctrl.h>
+#include "exynos-modem-ctrl.h"
 #if IS_ENABLED(CONFIG_EXYNOS_PMU_IF)
 #include <soc/google/exynos-pmu-if.h>
 #else
 #include <soc/google/exynos-pmu.h>
 #endif
+#include <soc/google/modem_notifier.h>
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "modem_ctrl.h"
@@ -196,7 +196,7 @@ MODULE_PARM_DESC(ds_detect, "Dual SIM detect");
 static ssize_t ds_detect_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "%d\n", ds_detect);
+	return sysfs_emit(buf, "%d\n", ds_detect);
 }
 
 static ssize_t ds_detect_store(struct device *dev,
@@ -641,7 +641,7 @@ int modem_force_crash_exit_ext(void)
 	ld->crash_reason.type = CRASH_REASON_MIF_FORCED;
 
 	if (!g_mc) {
-		mif_err("g_mc is null\n");
+		mif_debug("g_mc is null\n");
 		return -1;
 	}
 

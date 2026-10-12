@@ -21,10 +21,10 @@
 #if IS_ENABLED(CONFIG_ECT)
 #include <soc/google/ect_parser.h>
 #endif
-#include <soc/google/shm_ipc.h>
-#include <soc/google/mcu_ipc.h>
+#include <linux/shm_ipc.h>
+#include "mcu_ipc.h"
 #include <soc/google/cal-if.h>
-#include <linux/modem_notifier.h>
+#include <soc/google/modem_notifier.h>
 #include <linux/soc/samsung/exynos-smc.h>
 #include <trace/events/napi.h>
 #include "modem_prj.h"
@@ -39,6 +39,9 @@
 #include "dit.h"
 #endif
 #include "direct_dm.h"
+#if IS_ENABLED(CONFIG_BOOT_DEVICE_SPI)
+#include "boot_device_spi.h"
+#endif
 
 #define MIF_TX_QUOTA 64
 
@@ -227,8 +230,7 @@ static void link_trigger_cp_crash(struct mem_link_device *mld, u32 crash_type,
 	}
 
 	if (!reason_done && reason && reason[0] != '\0') {
-		strscpy(ld->crash_reason.string, reason,
-			sizeof(ld->crash_reason.string));
+		strlcpy(ld->crash_reason.string, reason, CP_CRASH_INFO_SIZE);
 		reason_done = true;
 	}
 
@@ -263,7 +265,7 @@ set_type:
 #if IS_ENABLED(CONFIG_SEC_MODEM_S5100)
 	if (ld->interrupt_types == INTERRUPT_GPIO)
 		/* Raise DUMP_NOTI GPIO to CP */
-		s5100_force_crash_exit_ext();
+		s5100_force_crash_exit_ext(crash_type);
 #endif
 
 	mif_err("%s->%s: CP_CRASH_REQ by %d, %s <%ps>\n",
@@ -2119,6 +2121,79 @@ out:
 	return ret;
 }
 
+static int link_load_gnss_image(struct link_device *ld,
+	struct io_device *iod, unsigned long arg)
+{
+	struct gnss_image img;
+	void __iomem *dst;
+	void __user *src;
+
+	int ret = 0;
+	struct mem_link_device *mld = to_mem_link_device(ld);
+
+	memset(&img, 0, sizeof(struct gnss_image));
+
+	mif_info("Load GNSS images\n");
+
+	if (!mld->gnss_v_base) {
+		mif_err("No gnss_fw vmap region\n");
+		return -ENOMEM;
+	}
+
+	ret = copy_from_user(&img, (const void __user *)arg, sizeof(img));
+	if (ret) {
+		mif_err("copy_from_user() fail:%d\n", ret);
+		return ret;
+	}
+
+	dst = (void __iomem *)(mld->gnss_v_base + img.offset);
+	src = (void __user *)((unsigned long)img.firmware_bin);
+	ret = copy_from_user_memcpy_toio(dst, src, img.firmware_size);
+	if (ret) {
+		mif_err("copy_from_user_memcpy_toio() fail:%d\n", ret);
+		return ret;
+	}
+
+	return ret;
+}
+
+static int link_read_gnss_image(struct link_device *ld,
+	struct io_device *iod, unsigned long arg)
+{
+	struct gnss_image img;
+	int err = 0;
+	struct mem_link_device *mld = to_mem_link_device(ld);
+
+	memset(&img, 0, sizeof(struct gnss_image));
+
+	if (!mld->gnss_v_base) {
+		mif_err("No gnss_fw vmap region\n");
+		return -ENOMEM;
+	}
+
+	err = copy_from_user(&img, (const void __user *)arg,
+			sizeof(struct gnss_image));
+	if (err) {
+		mif_err("copy_from_user fail:%d\n", err);
+		return err;
+	}
+
+	if (img.offset + img.firmware_size > cp_shmem_get_size(0, SHMEM_GNSS_FW)) {
+		mif_err("offset:%d size:%d error\n",
+			img.offset, img.firmware_size);
+		return -EFAULT;
+	}
+
+	err = copy_to_user(img.firmware_bin,
+		mld->gnss_v_base + img.offset, img.firmware_size);
+	if (err) {
+		mif_err("copy_to_user fail:%d\n", err);
+		return err;
+	}
+
+	return 0;
+}
+
 int shm_get_security_param2(u32 cp_num, unsigned long mode, u32 bl_size,
 		unsigned long *param)
 {
@@ -2619,14 +2694,14 @@ static void pcie_send_ap2cp_irq(struct mem_link_device *mld, u16 mask)
 	spin_lock_irqsave(&mc->pcie_tx_lock, flags);
 
 	if (mutex_is_locked(&mc->pcie_onoff_lock)) {
-		mif_info_limited("Reserve doorbell interrupt: PCI on/off working\n");
+		mif_debug("Reserve doorbell interrupt: PCI on/off working\n");
 		set_ctrl_msg(&mld->ap2cp_msg, mask);
 		mc->reserve_doorbell_int = true;
 		goto exit;
 	}
 
 	if (!mc->pcie_powered_on) {
-		mif_info_limited("Reserve doorbell interrupt: PCI not powered on\n");
+		mif_debug("Reserve doorbell interrupt: PCI not powered on\n");
 		set_ctrl_msg(&mld->ap2cp_msg, mask);
 		mc->reserve_doorbell_int = true;
 		s5100_try_gpio_cp_wakeup(mc);
@@ -2642,7 +2717,7 @@ exit:
 	spin_unlock_irqrestore(&mc->pcie_tx_lock, flags);
 
 	if (unlikely(force_crash))
-		s5100_force_crash_exit_ext();
+		s5100_force_crash_exit_ext(CRASH_REASON_PCIE_DOORBELL_FALIURE_AP2CP_IRQ);
 }
 
 static inline u16 pcie_read_ap2cp_irq(struct mem_link_device *mld)
@@ -2653,7 +2728,7 @@ static inline u16 pcie_read_ap2cp_irq(struct mem_link_device *mld)
 
 struct shmem_srinfo {
 	unsigned int size;
-	char buf[];
+	char buf[0];
 };
 
 /* not in use */
@@ -2736,7 +2811,7 @@ static int shmem_ioctl(struct link_device *ld, struct io_device *iod,
 
 irqreturn_t shmem_tx_state_handler(int irq, void *data)
 {
-	struct mem_link_device *mld = (struct mem_link_device *)data;
+	struct mem_link_device *mld = data;
 	struct link_device *ld = &mld->link_dev;
 	struct modem_ctl *mc = ld->mc;
 	u16 int2ap_status;
@@ -2805,7 +2880,7 @@ static int shmem_enqueue_snapshot(struct mem_link_device *mld)
 
 irqreturn_t shmem_irq_handler(int irq, void *data)
 {
-	struct mem_link_device *mld = (struct mem_link_device *)data;
+	struct mem_link_device *mld = data;
 
 	mld->rx_int_count++;
 	if (napi_schedule_prep(&mld->mld_napi)) {
@@ -2821,7 +2896,7 @@ irqreturn_t shmem_irq_handler(int irq, void *data)
 #if IS_ENABLED(CONFIG_MCU_IPC)
 static irqreturn_t shmem_cp2ap_wakelock_handler(int irq, void *data)
 {
-	struct mem_link_device *mld = (struct mem_link_device *)data;
+	struct mem_link_device *mld = data;
 	unsigned int req;
 
 	mif_info("%s\n", __func__);
@@ -2854,7 +2929,7 @@ static irqreturn_t shmem_cp2ap_wakelock_handler(int irq, void *data)
 #if IS_ENABLED(CONFIG_MCU_IPC) && IS_ENABLED(CONFIG_LINK_DEVICE_PCIE)
 static irqreturn_t shmem_cp2ap_rat_mode_handler(int irq, void *data)
 {
-	struct mem_link_device *mld = (struct mem_link_device *)data;
+	struct mem_link_device *mld = data;
 	unsigned int req;
 
 	req = extract_ctrl_msg(&mld->cp2ap_united_status, mld->sbi_cp_rat_mode_mask,
@@ -2949,7 +3024,7 @@ EXPORT_SYMBOL(shmem_ap2cp_write_clatinfo);
 
 static irqreturn_t shmem_cp2ap_clatinfo_ack(int irq, void *data)
 {
-	struct mem_link_device *mld = (struct mem_link_device *)data;
+	struct mem_link_device *mld = data;
 	struct link_device *ld = &mld->link_dev;
 	struct modem_ctl *mc = ld->mc;
 
@@ -3093,7 +3168,8 @@ static ssize_t tx_period_ms_show(struct device *dev,
 	struct modem_data *modem;
 
 	modem = (struct modem_data *)dev->platform_data;
-	return scnprintf(buf, PAGE_SIZE, "%ld\n", modem->mld->tx_period_ns / NSEC_PER_MSEC);
+	return sysfs_emit(buf, "%ld\n",
+			modem->mld->tx_period_ns / NSEC_PER_MSEC);
 }
 
 static ssize_t tx_period_ms_store(struct device *dev,
@@ -3226,7 +3302,7 @@ static ssize_t rx_int_enable_show(struct device *dev,
 	struct modem_data *modem;
 
 	modem = (struct modem_data *)dev->platform_data;
-	return scnprintf(buf, PAGE_SIZE, "%d\n", modem->mld->rx_int_enable);
+	return sysfs_emit(buf, "%d\n", modem->mld->rx_int_enable);
 }
 
 static ssize_t rx_int_count_show(struct device *dev,
@@ -3235,7 +3311,7 @@ static ssize_t rx_int_count_show(struct device *dev,
 	struct modem_data *modem;
 
 	modem = (struct modem_data *)dev->platform_data;
-	return scnprintf(buf, PAGE_SIZE, "%d\n", modem->mld->rx_int_count);
+	return sysfs_emit(buf, "%d\n", modem->mld->rx_int_count);
 }
 
 static ssize_t rx_int_count_store(struct device *dev,
@@ -3243,11 +3319,13 @@ static ssize_t rx_int_count_store(struct device *dev,
 		const char *buf, size_t count)
 {
 	struct modem_data *modem;
-	unsigned int val = 0;
-	int ret;
+	unsigned int ret, val = 0;
 
 	modem = (struct modem_data *)dev->platform_data;
 	ret = kstrtouint(buf, 0, &val);
+	if (ret < 0) {
+		mif_err("kstrtouint() failed, rc:%d\n", ret);
+	}
 
 	if (val == 0)
 		modem->mld->rx_int_count = 0;
@@ -3263,8 +3341,8 @@ static ssize_t rx_poll_count_show(struct device *dev,
 	modem = (struct modem_data *)dev->platform_data;
 	mld = modem->mld;
 
-	return scnprintf(buf, PAGE_SIZE, "%s: %d\n", netdev_name(&mld->dummy_net),
-		mld->rx_poll_count);
+	return sysfs_emit(buf, "%s: %d\n",
+			netdev_name(&mld->dummy_net), mld->rx_poll_count);
 }
 
 static ssize_t rx_poll_count_store(struct device *dev,
@@ -3287,7 +3365,7 @@ static ssize_t rx_int_disabled_time_show(struct device *dev,
 	struct modem_data *modem;
 
 	modem = (struct modem_data *)dev->platform_data;
-	return scnprintf(buf, PAGE_SIZE, "%lld\n", modem->mld->rx_int_disabled_time);
+	return sysfs_emit(buf, "%lld\n", modem->mld->rx_int_disabled_time);
 }
 
 static ssize_t rx_int_disabled_time_store(struct device *dev,
@@ -3295,11 +3373,13 @@ static ssize_t rx_int_disabled_time_store(struct device *dev,
 		const char *buf, size_t count)
 {
 	struct modem_data *modem;
-	unsigned int val = 0;
-	int ret;
+	unsigned int ret, val = 0;
 
 	modem = (struct modem_data *)dev->platform_data;
 	ret = kstrtouint(buf, 0, &val);
+	if (ret < 0) {
+		mif_err("kstrtouint() failed, rc:%d", ret);
+	}
 
 	if (val == 0)
 		modem->mld->rx_int_disabled_time = 0;
@@ -3422,7 +3502,7 @@ static ssize_t debug_disable_hw_clat_show(struct device *dev,
 	modem = (struct modem_data *)dev->platform_data;
 	mld = modem->mld;
 
-	return scnprintf(buf, PAGE_SIZE, "disable_hw_clat: %d\n", mld->disable_hw_clat);
+	return sysfs_emit(buf, "disable_hw_clat: %d\n", mld->disable_hw_clat);
 }
 
 static DEVICE_ATTR_WO(debug_hw_clat_test);
@@ -3505,7 +3585,7 @@ static enum hrtimer_restart sbd_print(struct hrtimer *timer)
 			spin_lock(&rb[TX]->iod->msd->active_list_lock);
 			list_for_each_entry(iod, &rb[TX]->iod->msd->activated_ndev_list,
 					node_ndev) {
-				len += snprintf(buf + len, BUFF_SIZE - len, "%s: %lu/%lu ",
+				len += scnprintf(buf + len, BUFF_SIZE - len, "%s: %lu/%lu ",
 						iod->name, iod->ndev->stats.tx_packets,
 						iod->ndev->stats.rx_packets);
 			}
@@ -3652,6 +3732,7 @@ static int set_ld_attr(struct platform_device *pdev,
 		mld->spi_bus_num = -1;
 		mif_dt_read_u32_noerr(pdev->dev.of_node, "cpboot_spi_bus_num",
 				mld->spi_bus_num);
+#if IS_ENABLED(CONFIG_BOOT_DEVICE_SPI)
 		if (mld->attrs & LINK_ATTR_XMIT_BTDLR_SPI) {
 			ld->load_cp_image = cpboot_spi_load_cp_image;
 
@@ -3660,6 +3741,11 @@ static int set_ld_attr(struct platform_device *pdev,
 				err = -ENODEV;
 				goto error;
 			}
+		}
+#endif
+		if (mld->attrs & LINK_ATTR_XMIT_BTDLR_GNSS) {
+			ld->load_gnss_image = link_load_gnss_image;
+			ld->read_gnss_image = link_read_gnss_image;
 		}
 	} while (0);
 
@@ -3753,7 +3839,6 @@ static int init_shmem_maps(u32 link_type, struct modem_data *modem,
 
 		of_property_read_u32(np_acpm, "dump-size", &mld->acpm_size);
 		of_property_read_u32(np_acpm, "dump-base", &acpm_addr);
-		of_node_put(np_acpm);
 		mld->acpm_base = cp_shmem_get_nc_region(acpm_addr, mld->acpm_size);
 		if (!mld->acpm_base) {
 			mif_err("Failed to vmap acpm_region\n");
@@ -3769,6 +3854,18 @@ static int init_shmem_maps(u32 link_type, struct modem_data *modem,
 
 	ld->link_type = link_type;
 	create_legacy_link_device(mld);
+
+	if (mld->attrs & LINK_ATTR_XMIT_BTDLR_GNSS) {
+		mld->gnss_v_base = cp_shmem_get_nc_region(
+				cp_shmem_get_base(0, SHMEM_GNSS_FW),
+				cp_shmem_get_size(0, SHMEM_GNSS_FW));
+		if (!mld->gnss_v_base) {
+			mif_err("cp_shmem_get_nc_region() for gnss_fw failed\n");
+		} else {
+			mif_info("gnss_v_base=%pK\n", mld->gnss_v_base);
+		}
+
+	}
 
 	if (ld->sbd_ipc) {
 		hrtimer_init(&mld->sbd_tx_timer,

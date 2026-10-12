@@ -24,6 +24,9 @@
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "modem_dump.h"
+#if IS_ENABLED(CONFIG_BOOT_DEVICE_SPI)
+#include "boot_device_spi.h"
+#endif
 
 static int bootdump_open(struct inode *inode, struct file *filp)
 {
@@ -140,7 +143,9 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 	enum modem_state p_state;
 	struct cpif_version version;
 	int ret = 0, value;
+#if IS_ENABLED(CONFIG_BOOT_DEVICE_SPI)
 	struct mem_link_device *mld;
+#endif
 
 	switch (cmd) {
 	case IOCTL_POWER_ON:
@@ -191,7 +196,16 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 				mif_err("%s: power_reset_dump is null\n", iod->name);
 				return -EINVAL;
 			}
-			ret = mc->ops.power_reset_dump(mc);
+			ret = mc->ops.power_reset_dump(mc, 0);
+			break;
+
+		case CP_BOOT_MODE_SILENT:
+			mif_info("%s: silent mode\n", iod->name);
+			if (!mc->ops.power_reset_dump) {
+				mif_err("%s: power_reset_dump is null\n", iod->name);
+				return -EINVAL;
+			}
+			ret = mc->ops.power_reset_dump(mc, 1);
 			break;
 
 		default:
@@ -201,6 +215,14 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 
 		return ret;
 	}
+
+	case IOCTL_SILENT_RESET:
+		if (!mc->ops.silent_reset) {
+			mif_err("%s: silent_reset is null\n", iod->name);
+			return -EINVAL;
+		}
+		mif_info("%s: IOCTL_SILENT_RESET\n", iod->name);
+		return mc->ops.silent_reset(mc);
 
 	case IOCTL_REQ_SECURITY:
 		if (!ld->security_req) {
@@ -386,6 +408,7 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 		mif_info("%s: IOCTL_HANDOVER_BLOCK_INFO\n", iod->name);
 		return ld->handover_block_info(ld, arg);
 
+#if IS_ENABLED(CONFIG_BOOT_DEVICE_SPI)
 	case IOCTL_SET_SPI_BOOT_MODE:
 		mld = to_mem_link_device(ld);
 		if (!mld) {
@@ -403,6 +426,7 @@ static long bootdump_ioctl(struct file *filp, unsigned int cmd, unsigned long ar
 
 		mif_info("%s: IOCTL_SET_SPI_BOOT_MODE\n", iod->name);
 		return 0;
+#endif
 
 	case IOCTL_GET_OPENED_STATUS:
 		mif_debug("%s: IOCTL_GET_OPENED_STATUS\n", iod->name);

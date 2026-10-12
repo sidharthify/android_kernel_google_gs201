@@ -1997,7 +1997,7 @@ static ssize_t debug_use_tx_store(struct device *dev, struct device_attribute *a
 static ssize_t debug_use_tx_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "use_tx: %d\n", dc->use_tx);
+	return sysfs_emit(buf, "use_tx: %d\n", dc->use_tx);
 }
 
 static ssize_t debug_use_rx_store(struct device *dev, struct device_attribute *attr,
@@ -2017,7 +2017,7 @@ static ssize_t debug_use_rx_store(struct device *dev, struct device_attribute *a
 static ssize_t debug_use_rx_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "use_rx: %d\n", dc->use_rx);
+	return sysfs_emit(buf, "use_rx: %d\n", dc->use_rx);
 }
 
 static ssize_t debug_use_clat_store(struct device *dev, struct device_attribute *attr,
@@ -2049,14 +2049,14 @@ static ssize_t debug_use_clat_store(struct device *dev, struct device_attribute 
 static ssize_t debug_use_clat_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "use_clat: %d\n", dc->use_clat);
+	return sysfs_emit(buf, "use_clat: %d\n", dc->use_clat);
 }
 #endif
 
 #if defined(DIT_DEBUG_LOW)
 static ssize_t debug_pktgen_ch_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "pktgen ch: %d\n", dc->pktgen_ch);
+	return sysfs_emit(buf, "pktgen ch: %d\n", dc->pktgen_ch);
 }
 
 static ssize_t debug_pktgen_ch_store(struct device *dev,

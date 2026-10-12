@@ -3,8 +3,6 @@
 
 ccflags-y += -Wformat
 ccflags-y += -Wformat-zero-length
-CFLAGS_dit.o += -Wno-missing-prototypes
-CFLAGS_dit_net.o += -Wno-missing-prototypes
 
 obj-$(CONFIG_EXYNOS_DIT) += exynos_dit.o
 exynos_dit-y += dit.o dit_net.o dit_hal.o
