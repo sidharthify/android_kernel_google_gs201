@@ -280,6 +280,17 @@ config PKVM_S2MPU
 	help
 	This module is a driver for the stage-2 IOMMU controlled by hypervisor.
 
+config S2MPU_PASSTHROUGH
+	tristate "Pass-through for pKVM S2MPUs on kernels without pKVM"
+	depends on !PKVM_S2MPU
+	default n
+	help
+	  Without pKVM nothing binds the google,s2mpu nodes and nothing programs
+	  those S2MPUs, so their power domains never power off and each S2MPU
+	  blocks its master's DMA after every power-up. This driver binds the
+	  nodes and switches each S2MPU to pass-through after every power-up of
+	  its domain. It gives no DMA isolation.
+
 config WLAN_TRACKER
 	bool "WiFi performance tracker driver"
 	depends on SOC_GS201
