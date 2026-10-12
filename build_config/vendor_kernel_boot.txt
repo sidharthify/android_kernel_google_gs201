@@ -48,6 +48,7 @@ exynos-pd.ko
 exynos-pd-dbg.ko
 exynos-pd_el3.ko
 exynos-pd_hsi0.ko
+s2mpu-passthrough.ko
 exynos-pm.ko
 exynos-cpupm.ko
 ect_parser.ko
