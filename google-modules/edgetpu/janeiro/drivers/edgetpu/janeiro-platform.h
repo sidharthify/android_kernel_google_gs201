@@ -18,8 +18,11 @@ struct janeiro_platform_dev {
 	struct edgetpu_mobile_platform_dev mobile_dev;
 	/* TPU sysreg shareability register, NULL if IO coherency is not used */
 	void __iomem *shareability;
+	/* TPU S2MPU, only mapped when there is no pKVM to configure it */
+	void __iomem *s2mpu;
 };
 
 void janeiro_restore_shareability(struct edgetpu_dev *etdev);
+void janeiro_open_s2mpu(struct edgetpu_dev *etdev);
 
 #endif /* __JANEIRO_PLATFORM_H__ */

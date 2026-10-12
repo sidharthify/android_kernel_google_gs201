@@ -91,6 +91,7 @@ static int janeiro_lpm_up(struct edgetpu_dev *etdev)
 	edgetpu_dev_write_32_sync(etdev, EDGETPU_PSM1_CFG, 0);
 
 	janeiro_restore_shareability(etdev);
+	janeiro_open_s2mpu(etdev);
 
 	return 0;
 }

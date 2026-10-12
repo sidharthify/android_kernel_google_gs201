@@ -10,6 +10,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/platform_device.h>
 
 #include "edgetpu-config.h"
@@ -60,6 +61,45 @@ void janeiro_restore_shareability(struct edgetpu_dev *etdev)
 			       jpdev->shareability);
 }
 
+/* S2MPU control register; clearing ENABLE lets all traffic through */
+#define S2MPU_REG_NS_CTRL0	0x0
+
+/*
+ * Under pKVM the hypervisor configures the TPU S2MPU whenever pd-tpu powers
+ * up. Without it nothing does, and the S2MPU comes out of every power-up
+ * enabled with no permissions. The TPU's DMA, including the SysMMU's page
+ * table walks, then reads zeros, and every client access page-faults. Switch
+ * it to pass-through after each power-up instead.
+ */
+void janeiro_open_s2mpu(struct edgetpu_dev *etdev)
+{
+	struct janeiro_platform_dev *jpdev = to_janeiro_dev(etdev);
+
+	if (jpdev->s2mpu)
+		writel(0, jpdev->s2mpu + S2MPU_REG_NS_CTRL0);
+}
+
+static void janeiro_map_s2mpu(struct janeiro_platform_dev *jpdev)
+{
+	struct device *dev = jpdev->mobile_dev.edgetpu_dev.dev;
+	struct device_node *np;
+	void __iomem *base;
+
+	if (IS_ENABLED(CONFIG_PKVM_S2MPU))
+		return;
+
+	np = of_parse_phandle(dev->of_node, "s2mpu", 0);
+	if (!np)
+		return;
+	base = devm_of_iomap(dev, np, 0, NULL);
+	of_node_put(np);
+	if (IS_ERR(base)) {
+		dev_warn(dev, "failed to map s2mpu (%ld)\n", PTR_ERR(base));
+		return;
+	}
+	jpdev->s2mpu = base;
+}
+
 static int janeiro_parse_set_dt_property(struct edgetpu_mobile_platform_dev *etmdev)
 {
 	int ret;
@@ -90,6 +130,7 @@ err:
 
 static int janeiro_platform_after_probe(struct edgetpu_mobile_platform_dev *etmdev)
 {
+	janeiro_map_s2mpu(to_janeiro_dev(&etmdev->edgetpu_dev));
 	return janeiro_parse_set_dt_property(etmdev);
 }
 
