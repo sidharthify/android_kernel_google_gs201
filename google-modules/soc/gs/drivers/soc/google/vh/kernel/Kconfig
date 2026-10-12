@@ -1,15 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # kernel vendor hook modules
 
-config VH_SCHED
-        tristate "Vendor hooks for kernel scheduler"
-        depends on VH_KERNEL
-        default m
-
-config VH_SCHED_MAX_CPU_NR
-        int "CPU number on this platform"
-        default 8
-
 config VH_SYSTRACE
         tristate "Vendor SYSTRACE support"
         depends on VH_KERNEL
@@ -61,22 +52,4 @@ config VH_I2C
 	depends on VH_KERNEL
 	default n
 
-config UCLAMP_STATS
-        bool "Uclamp stats"
-        depends on VH_KERNEL
-        default n
-
-config VH_PREEMPTIRQ_TRACEPOINTS
-        tristate "Vendor hooks for long preemptirq trace points"
-        depends on VH_SCHED
-        default m
-
-config USE_VENDOR_GROUP_UTIL
-        bool "Use cpu util based on vendor groups"
-        depends on VH_SCHED
-        default y
-
-config USE_GROUP_THROTTLE
-        bool "Use group throttle of vendor groups"
-        depends on VH_SCHED
-        default y
+source "$(KCONFIG_SOC_GS_PREFIX)drivers/soc/google/vh/kernel/sched/Kconfig"

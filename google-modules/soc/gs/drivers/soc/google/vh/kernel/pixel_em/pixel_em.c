@@ -8,7 +8,7 @@
 
 #define pr_fmt(fmt) "pixel-em: " fmt
 
-#include <linux/sched/topology.h>
+#include <linux/arch_topology.h>
 #include <linux/bitops.h>
 #include <linux/cpufreq.h>
 #include <linux/cpumask.h>
@@ -27,69 +27,32 @@
 #if IS_ENABLED(CONFIG_VH_SCHED)
 extern struct pixel_em_profile **vendor_sched_pixel_em_profile;
 extern struct pixel_idle_em *vendor_sched_pixel_idle_em;
+extern raw_spinlock_t vendor_sched_pixel_em_lock;
 extern void vh_arch_set_freq_scale_pixel_mod(void *data,
 					     const struct cpumask *cpus,
 					     unsigned long freq,
 					     unsigned long max,
 					     unsigned long *scale);
+
+extern bool update_thermal_freq_cap(unsigned int cpu);
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+extern void reset_scaling_freq(int cpu);
+#endif
 #endif
 
 #if IS_ENABLED(CONFIG_EXYNOS_CPU_THERMAL)
 extern struct pixel_em_profile **exynos_cpu_cooling_pixel_em_profile;
 #endif
 
-#if IS_ENABLED(CONFIG_VH_SCHED)
 extern int pixel_cpu_num;
 extern int pixel_cluster_num;
 extern int *pixel_cluster_start_cpu;
 extern bool pixel_cpu_init;
 
-static int init_pixel_cpu() {
-	if (!pixel_cpu_init)
-		return -EPROBE_DEFER;
-	return 0;
-}
-#else
-static int pixel_cpu_num;
-static int pixel_cluster_num;
-static int *pixel_cluster_start_cpu;
-
-static int init_pixel_cpu(void) {
-	int i = 0, j = 0;
-	unsigned long cur_capacity = 0;
-
-	pixel_cluster_num = 0;
-
-	pixel_cpu_num = cpumask_weight(cpu_possible_mask);
-	if (!pixel_cpu_num)
-		return -EPROBE_DEFER;
-
-	for_each_possible_cpu(i) {
-		if (arch_scale_cpu_capacity(i) > cur_capacity) {
-			cur_capacity = arch_scale_cpu_capacity(i);
-			pixel_cluster_num++;
-		}
-	}
-
-	pixel_cluster_start_cpu = kcalloc(pixel_cluster_num, sizeof(int), GFP_KERNEL);
-	if (!pixel_cluster_start_cpu)
-		return -ENOMEM;
-
-	cur_capacity = 0;
-	for_each_possible_cpu(i) {
-		if (arch_scale_cpu_capacity(i) > cur_capacity) {
-			pixel_cluster_start_cpu[j++] = i;
-			cur_capacity = arch_scale_cpu_capacity(i);
-		}
-	}
-
-	return 0;
-}
-#endif /* CONFIG_VH_SCHED */
-
 static struct mutex profile_list_lock;
 static LIST_HEAD(profile_list);
 static struct pixel_em_profile *active_profile;
+static struct pixel_idle_em *idle_profile;
 
 static struct mutex sysfs_lock; // Synchronize sysfs calls.
 static struct kobject *primary_sysfs_folder;
@@ -98,17 +61,20 @@ static struct kobject *profiles_sysfs_folder;
 static struct platform_device *platform_dev;
 
 static struct pixel_em_profile *generate_default_em_profile(const char *);
-static void pixel_em_free_profile(struct pixel_em_profile *);
+static void pixel_em_free_profile(struct pixel_em_profile *, bool);
 static int pixel_em_publish_profile(struct pixel_em_profile *);
 static void pixel_em_unpublish_profile(struct pixel_em_profile *);
 
+#if IS_ENABLED(CONFIG_VH_SCHED)
+static void pixel_em_free_idle(struct pixel_idle_em *);
+#endif
+
 static int pixel_em_init_cpu_layout(void)
 {
-	int i, ret;
+	int i;
 
-	ret = init_pixel_cpu();
-	if (ret)
-		return ret;
+	if (!pixel_cpu_init)
+		return -EPROBE_DEFER;
 
 	for (i = 0; i < pixel_cluster_num; i++) {
 		struct em_perf_domain *pd = em_cpu_get(pixel_cluster_start_cpu[i]);
@@ -162,6 +128,19 @@ static struct pixel_em_profile *find_profile(const char *name)
 	return NULL;
 }
 
+/*
+ * We assume opps[@opp_id] was updated when this function gets called, which
+ * potentially could make the previous opp_id ineffiicent now, so check for
+ * this.
+ */
+static void update_inefficient_prev_opp(struct pixel_em_opp opps[], int opp_id)
+{
+	if (!opp_id)
+		return;
+
+	opps[opp_id-1].inefficient = opps[opp_id-1].cost >= opps[opp_id].cost;
+}
+
 
 static void apply_profile(struct pixel_em_profile *profile)
 {
@@ -202,6 +181,10 @@ static void apply_profile(struct pixel_em_profile *profile)
 				for_each_cpu(cpu, &cluster->cpus) {
 					WRITE_ONCE(per_cpu(arch_freq_scale, cpu), new_freq_scale);
 				}
+
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+				reset_scaling_freq(policy->cpu);
+#endif
 			}
 #endif
 			spin_unlock(&policy->transition_lock);
@@ -211,11 +194,63 @@ static void apply_profile(struct pixel_em_profile *profile)
 		} else {
 			pr_err("Could not find cpufreq policy for CPU %d!\n", cpu);
 		}
+
+		update_thermal_freq_cap(cpu);
 	}
 }
 
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+static inline void update_em_voltage_table(struct pixel_em_profile *profile,
+			    int cpu,
+			    bool voltage_table)
+
+{
+	profile->cpu_to_cluster[cpu]->voltage_table = voltage_table;
+}
+
+static inline void update_em_voltage_scaling_target(struct pixel_em_profile *profile,
+			    int cpu,
+			    int voltage_scaling_target)
+
+{
+	profile->cpu_to_cluster[cpu]->voltage_scaling_target = voltage_scaling_target;
+}
+#endif
+
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+static inline void update_em_frequency_scaling_table(struct pixel_em_profile *profile,
+						     int cpu,
+						     bool frequency_scaling_table)
+
+{
+	profile->cpu_to_cluster[cpu]->frequency_scaling_table = frequency_scaling_table;
+}
+
+static inline void update_em_frequency_scaling_target(struct pixel_em_profile *profile,
+						      int cpu,
+						      int frequency_scaling_target)
+
+{
+	profile->cpu_to_cluster[cpu]->frequency_scaling_target = frequency_scaling_target;
+}
+
+static inline void update_em_constraint_type(struct pixel_em_profile *profile,
+					     int cpu,
+					     enum constraint_type constraint_type)
+
+{
+	profile->cpu_to_cluster[cpu]->constraint_type = constraint_type;
+}
+#endif
+
 static bool update_em_entry(struct pixel_em_profile *profile,
 			    int cpu,
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+			    unsigned long voltage,
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+			    unsigned int scaling_freq,
+#endif
 			    unsigned int freq,
 			    unsigned int cap,
 			    unsigned int power)
@@ -225,7 +260,6 @@ static bool update_em_entry(struct pixel_em_profile *profile,
 
 	for (cluster_id = 0; cluster_id < profile->num_clusters; cluster_id++) {
 		struct pixel_em_cluster *cluster = &profile->clusters[cluster_id];
-		unsigned long max_freq = cluster->opps[cluster->num_opps - 1].freq;
 
 		if (!cpumask_test_cpu(cpu, &cluster->cpus))
 			continue;
@@ -234,7 +268,16 @@ static bool update_em_entry(struct pixel_em_profile *profile,
 			if (cluster->opps[opp_id].freq == freq) {
 				cluster->opps[opp_id].capacity = cap;
 				cluster->opps[opp_id].power = power;
-				cluster->opps[opp_id].cost = (max_freq * power) / freq;
+				cluster->opps[opp_id].cost = power / cap;
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+				if (cluster->voltage_table)
+					cluster->opps[opp_id].voltage = voltage;
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+				if (cluster->frequency_scaling_table)
+					cluster->opps[opp_id].scaling_freq = scaling_freq;
+#endif
+				update_inefficient_prev_opp(cluster->opps, opp_id);
 				return true;
 			}
 		}
@@ -251,23 +294,23 @@ static bool update_em_entry(struct pixel_em_profile *profile,
 #if IS_ENABLED(CONFIG_VH_SCHED)
 static bool update_idle_em_entry(struct pixel_idle_em *idle_em,
 			    int cpu,
-			    unsigned int freq,
-			    unsigned int power)
+				unsigned int freq,
+				unsigned int energy)
 {
 	int cluster_id;
 	int opp_id;
 
+	WARN_ON(energy >= UINT_MAX/2);
+
 	for (cluster_id = 0; cluster_id < idle_em->num_clusters; cluster_id++) {
 		struct pixel_em_cluster *cluster = &idle_em->clusters[cluster_id];
-		unsigned long max_freq = cluster->opps[cluster->num_opps - 1].freq;
 
 		if (!cpumask_test_cpu(cpu, &cluster->cpus))
 			continue;
 
 		for (opp_id = 0; opp_id < cluster->num_opps; opp_id++) {
-			if (cluster->opps[opp_id].freq == freq) {
-				cluster->opps[opp_id].power = power;
-				cluster->opps[opp_id].cost = (max_freq * power) / freq;
+			if (cluster->idle_opps[opp_id].freq == freq) {
+				cluster->idle_opps[opp_id].energy = energy;
 				return true;
 			}
 		}
@@ -305,6 +348,17 @@ static void update_profile(struct pixel_em_profile *dst, const struct pixel_em_p
 			return;
 		}
 
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+		dst_cluster->voltage_table = src_cluster->voltage_table;
+		dst_cluster->voltage_scaling_target = src_cluster->voltage_scaling_target;
+		dst_cluster->scaling_factor_table = src_cluster->scaling_factor_table;
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+		dst_cluster->frequency_scaling_table = src_cluster->frequency_scaling_table;
+		dst_cluster->frequency_scaling_target = src_cluster->frequency_scaling_target;
+		dst_cluster->constraint_type = src_cluster->constraint_type;
+#endif
+
 		for (opp_id = 0; opp_id < src_cluster->num_opps; opp_id++) {
 			if (dst_cluster->opps[opp_id].freq != src_cluster->opps[opp_id].freq) {
 				pr_err("Cannot update incompatible profiles (different CPU freqs)!\n");
@@ -312,7 +366,15 @@ static void update_profile(struct pixel_em_profile *dst, const struct pixel_em_p
 			}
 			dst_cluster->opps[opp_id].capacity = src_cluster->opps[opp_id].capacity;
 			dst_cluster->opps[opp_id].power = src_cluster->opps[opp_id].power;
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+			dst_cluster->opps[opp_id].voltage = src_cluster->opps[opp_id].voltage;
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+			dst_cluster->opps[opp_id].scaling_freq =
+				src_cluster->opps[opp_id].scaling_freq;
+#endif
 			dst_cluster->opps[opp_id].cost = src_cluster->opps[opp_id].cost;
+			dst_cluster->opps[opp_id].inefficient = src_cluster->opps[opp_id].inefficient;
 		}
 	}
 }
@@ -325,6 +387,12 @@ static bool check_profile_consistency(const struct pixel_em_profile *profile)
 
 	for (cluster_id = 0; cluster_id < profile->num_clusters; cluster_id++) {
 		struct pixel_em_cluster *cluster = &profile->clusters[cluster_id];
+
+		if (cluster->num_opps == 0) {
+			pr_err("No entries in profile!\n");
+			return false;
+		}
+
 		for (opp_id = 1; opp_id < cluster->num_opps; opp_id++) {
 			if (cluster->opps[opp_id].freq <= cluster->opps[opp_id -1].freq) {
 				pr_err("Non-ascending frequency in profile (freq: %u KHz)!\n",
@@ -368,6 +436,55 @@ static void scale_profile_capacities(struct pixel_em_profile *profile)
 	}
 }
 
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+static bool create_scaling_factor_table(struct pixel_em_profile *profile)
+{
+	int cluster_id;
+	int row, column;
+	struct pixel_em_cluster *source_cluster, *target_cluster;
+
+	for (cluster_id = 0; cluster_id < profile->num_clusters; cluster_id++) {
+		int i, j;
+		unsigned long source_voltage, target_voltage;
+
+		source_cluster = &profile->clusters[cluster_id];
+
+		if (source_cluster->voltage_scaling_target != -1) {
+			target_cluster = profile->cpu_to_cluster[source_cluster->voltage_scaling_target];
+
+			if (!source_cluster->voltage_table || !target_cluster->voltage_table)
+				continue;
+
+			row = source_cluster->num_opps;
+			column = target_cluster->num_opps;
+
+			source_cluster->scaling_factor_table = kcalloc(row * column,
+								sizeof(unsigned long), GFP_KERNEL);
+
+			if (!source_cluster->scaling_factor_table)
+				return false;
+
+			for (i = 0; i < row; i++) {
+				for (j = 0; j < column; j++) {
+					source_voltage = source_cluster->opps[i].voltage;
+					target_voltage = target_cluster->opps[j].voltage;
+
+					if (source_voltage > target_voltage)
+					    *(source_cluster->scaling_factor_table + i * column + j)
+						= (source_voltage << SCHED_CAPACITY_SHIFT) *
+						  source_voltage / target_voltage / target_voltage;
+					else
+					    *(source_cluster->scaling_factor_table + i * column + j)
+						= SCHED_CAPACITY_SCALE;
+				}
+			}
+		}
+	}
+
+	return true;
+}
+#endif
+
 static int parse_profile(const char *profile_input, int profile_input_length)
 {
 	char *profile_input_dup = kstrndup(profile_input, profile_input_length, GFP_KERNEL);
@@ -378,6 +495,16 @@ static int parse_profile(const char *profile_input, int profile_input_length)
 	struct pixel_em_profile *pre_existing_profile;
 	int current_cpu_id = -1;
 	int res = profile_input_length;
+	bool voltage_table = false;
+	bool frequency_scaling_table = false;
+
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+	int voltage_scaling_target = -1;
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+	int frequency_scaling_target = -1;
+	enum constraint_type constraint_type = CONSTRAINT_NONE;
+#endif
 
 	if (!profile_input_dup) {
 		res = -ENOMEM;
@@ -405,6 +532,15 @@ static int parse_profile(const char *profile_input, int profile_input_length)
 		char *skipped_blanks = skip_spaces(cur_line);
 
 		if (skipped_blanks[0] == '\0' || skipped_blanks[0] == '}') {
+			voltage_table = false;
+			frequency_scaling_table = false;
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+			voltage_scaling_target = -1;
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+			frequency_scaling_target = -1;
+			constraint_type = CONSTRAINT_NONE;
+#endif
 			continue;
 		} else if (strncasecmp(skipped_blanks, "cpu", 3) == 0) {
 			// Expecting a CPU line here...
@@ -419,10 +555,96 @@ static int parse_profile(const char *profile_input, int profile_input_length)
 				goto early_return;
 			}
 			pr_debug("Setting active CPU to %d...\n", current_cpu_id);
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+		} else if (strncasecmp(skipped_blanks, "voltage_table", 13) == 0) {
+			char val;
+			if (sscanf(skipped_blanks + 14, "%c", &val) != 1) {
+				pr_err("Error when parsing '%s'!\n", skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			if (val == 'y' || val == 'Y') {
+				voltage_table = true;
+				update_em_voltage_table(profile, current_cpu_id, voltage_table);
+			}
+			pr_debug("Setting voltage table to %d...\n", voltage_table);
+		} else if (strncasecmp(skipped_blanks, "voltage_scaling_target", 22) == 0) {
+			if (sscanf(skipped_blanks + 23, "%d", &voltage_scaling_target) != 1) {
+				pr_err("Error when parsing '%s'!\n", skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			if (voltage_scaling_target < 0 || voltage_scaling_target >= pixel_cpu_num) {
+				pr_err("Invalid voltage_scaling_target specified '%s'!\n",
+					skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			update_em_voltage_scaling_target(profile, current_cpu_id,
+							 voltage_scaling_target);
+			pr_debug("Setting voltage scaling target to %d...\n",
+				 voltage_scaling_target);
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+		} else if (strncasecmp(skipped_blanks, "frequency_scaling_table", 23) == 0) {
+			char val;
+			if (sscanf(skipped_blanks + 24, "%c", &val) != 1) {
+				pr_err("Error when parsing '%s'!\n", skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			if (val == 'y' || val == 'Y') {
+				frequency_scaling_table = true;
+				update_em_frequency_scaling_table(profile, current_cpu_id,
+								  frequency_scaling_table);
+			}
+			pr_debug("Setting frequency scaling table to %d...\n",
+				 frequency_scaling_table);
+		} else if (strncasecmp(skipped_blanks, "frequency_scaling_target", 24) == 0) {
+			if (sscanf(skipped_blanks + 25, "%d", &frequency_scaling_target) != 1) {
+				pr_err("Error when parsing '%s'!\n", skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			if (frequency_scaling_target < 0 ||
+			    frequency_scaling_target >= pixel_cpu_num) {
+				pr_err("Invalid frequency_scaling_target specified '%s'!\n",
+					skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			update_em_frequency_scaling_target(profile, current_cpu_id,
+							   frequency_scaling_target);
+			pr_debug("Setting frequency scaling target to %d...\n",
+				 frequency_scaling_target);
+		} else if (strncasecmp(skipped_blanks, "constraint_type", 15) == 0) {
+			char val[16];
+			if (sscanf(skipped_blanks + 16, "%s", val) != 1) {
+				pr_err("Error when parsing '%s'!\n", skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			if (strncasecmp(val, "min", 3) == 0) {
+				constraint_type = CONSTRAINT_MIN;
+				update_em_constraint_type(profile, current_cpu_id, constraint_type);
+			} else if (strncasecmp(val, "max", 3) == 0) {
+				constraint_type = CONSTRAINT_MAX;
+				update_em_constraint_type(profile, current_cpu_id, constraint_type);
+			} else {
+				pr_err("Invalid constraint_type specified '%s'!\n", skipped_blanks);
+				res = -EINVAL;
+				goto early_return;
+			}
+			pr_debug("Setting frequency scaling table to %s...\n", val);
+#endif
 		} else if (skipped_blanks[0] != '\0' && skipped_blanks[0] != '}') {
 			unsigned int freq = 0;
 			unsigned int cap = 0;
 			unsigned int power = 0;
+			unsigned long voltage = 0;
+			unsigned int scaling_freq = 0;
+			unsigned int val1, val2;
+			int num_values;
 
 			if (current_cpu_id == -1) {
 				pr_err("Error: no CPU id specified before parsing '%s'!\n",
@@ -430,21 +652,99 @@ static int parse_profile(const char *profile_input, int profile_input_length)
 				res = -EINVAL;
 				goto early_return;
 			}
-			if (sscanf(skipped_blanks, "%u %u %u", &freq, &cap, &power) != 3) {
-				pr_err("Error when parsing '%s'!\n", skipped_blanks);
-				res = -EINVAL;
-				goto early_return;
-			}
-			if (freq == 0 || cap == 0 || power == 0) {
-				pr_err("Illegal freq/cap/power combination specified: %u, %u, %u.\n",
-				       freq,
-				       cap,
-				       power);
-				res = -EINVAL;
-				goto early_return;
+
+			num_values = sscanf(skipped_blanks, "%u %u %u %u %u", &freq, &cap, &power,
+					   &val1, &val2);
+
+			if (num_values == 0)
+				continue;
+
+			if (voltage_table && frequency_scaling_table) {
+				if (num_values < 5) {
+					pr_err("Error when parsing '%s'!\n", skipped_blanks);
+					res = -EINVAL;
+					goto early_return;
+				}
+				voltage = val1;
+				scaling_freq = val2;
+				if (freq == 0 || cap == 0 || power == 0 || voltage == 0 ||
+				    scaling_freq == 0) {
+					pr_err("Illegal freq/cap/power/voltage/scaling_freq " \
+					       "combination specified: %u, %u, %u, %lu, %u.\n",
+					       freq,
+					       cap,
+					       power,
+					       voltage,
+					       scaling_freq);
+					res = -EINVAL;
+					goto early_return;
+				}
+			} else if (voltage_table) {
+				if (num_values < 4) {
+					pr_err("Error when parsing '%s'!\n", skipped_blanks);
+					res = -EINVAL;
+					goto early_return;
+				}
+				voltage = val1;
+				if (freq == 0 || cap == 0 || power == 0 || voltage == 0) {
+					pr_err("Illegal freq/cap/power/voltage combination " \
+					       "specified: %u, %u, %u, %lu.\n",
+					       freq,
+					       cap,
+					       power,
+					       voltage);
+					res = -EINVAL;
+					goto early_return;
+				}
+			} else if (frequency_scaling_table) {
+				if (num_values < 4) {
+					pr_err("Error when parsing '%s'!\n", skipped_blanks);
+					res = -EINVAL;
+					goto early_return;
+				}
+				if (num_values == 5)
+					scaling_freq = val2;
+				else
+					scaling_freq = val1;
+				if (freq == 0 || cap == 0 || power == 0 || scaling_freq == 0) {
+					pr_err("Illegal freq/cap/power/scaling_freq combination " \
+					       "specified: %u, %u, %u, %u.\n",
+					       freq,
+					       cap,
+					       power,
+					       scaling_freq);
+					res = -EINVAL;
+					goto early_return;
+				}
+			} else {
+				if (num_values < 3) {
+					pr_err("Error when parsing '%s'!\n", skipped_blanks);
+					res = -EINVAL;
+					goto early_return;
+				}
+				if (freq == 0 || cap == 0 || power == 0) {
+					pr_err("Illegal freq/cap/power combination specified: " \
+					       "%u, %u, %u.\n",
+					       freq,
+					       cap,
+					       power);
+					res = -EINVAL;
+					goto early_return;
+				}
 			}
 
-			update_em_entry(profile, current_cpu_id, freq, cap, power);
+
+			update_em_entry(profile,
+					current_cpu_id,
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+					voltage,
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+					scaling_freq,
+#endif
+					freq,
+					cap,
+					power);
 		}
 	}
 
@@ -455,16 +755,23 @@ static int parse_profile(const char *profile_input, int profile_input_length)
 
 	scale_profile_capacities(profile);
 
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+	if (!create_scaling_factor_table(profile)) {
+		res = -EINVAL;
+		goto early_return;
+	}
+#endif
+
 	if (!pre_existing_profile) {
 		int file_res = pixel_em_publish_profile(profile);
 		if (file_res) {
-			pixel_em_free_profile(profile);
+			pixel_em_free_profile(profile, false);
 			res = file_res;
 			goto early_return;
 		}
 	} else {
 		update_profile(pre_existing_profile, profile);
-		pixel_em_free_profile(profile);
+		pixel_em_free_profile(profile, true);
 		profile = pre_existing_profile;
 		if (profile == active_profile)
 			apply_profile(profile);
@@ -473,7 +780,7 @@ static int parse_profile(const char *profile_input, int profile_input_length)
 early_return:
 	kfree(profile_input_dup);
 	if (res < 0) {
-		pixel_em_free_profile(profile);
+		pixel_em_free_profile(profile, false);
 	} else {
 		pr_info("Successfully created/updated profile '%s'!\n", profile->name);
 	}
@@ -483,41 +790,50 @@ early_return:
 
 static bool generate_em_cluster(struct pixel_em_cluster *dst, struct em_perf_domain *pd)
 {
-	int first_cpu = cpumask_first(em_span_cpus(pd));
-	int cpu_scale = topology_get_cpu_scale(first_cpu);
+    int first_cpu = cpumask_first(em_span_cpus(pd));
+    int cpu_scale = topology_get_cpu_scale(first_cpu);
 	int max_freq_index = pd->nr_perf_states - 1;
-	struct em_perf_state *table;
-	unsigned long max_freq;
+	unsigned long max_freq = pd->table[max_freq_index].frequency;
 	int opp_id;
 
 	cpumask_copy(&dst->cpus, em_span_cpus(pd));
-
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+	dst->voltage_table = false;
+	dst->voltage_scaling_target = -1;
+	dst->voltage_level = 0;
+	dst->scaling_factor_table = NULL;
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+	dst->frequency_scaling_table = false;
+	dst->frequency_scaling_target = -1;
+	dst->constraint_type = CONSTRAINT_NONE;
+#endif
 	dst->num_opps = pd->nr_perf_states;
 
 	dst->opps = kcalloc(dst->num_opps, sizeof(*dst->opps), GFP_KERNEL);
 	if (!dst->opps)
 		return false;
 
-	rcu_read_lock();
-	table = em_perf_state_from_pd(pd);
-
-	max_freq = table[max_freq_index].frequency;
 	for (opp_id = 0; opp_id < pd->nr_perf_states; opp_id++) {
-		dst->opps[opp_id].freq = table[opp_id].frequency;
-		dst->opps[opp_id].power = table[opp_id].power;
-		dst->opps[opp_id].cost = table[opp_id].cost;
+		dst->opps[opp_id].freq = pd->table[opp_id].frequency;
+		dst->opps[opp_id].power = pd->table[opp_id].power;
 		dst->opps[opp_id].capacity = (dst->opps[opp_id].freq * cpu_scale) / max_freq;
+		dst->opps[opp_id].cost = pd->table[opp_id].power / dst->opps[opp_id].capacity;
+		update_inefficient_prev_opp(dst->opps, opp_id);
 	}
-
-	rcu_read_unlock();
 
 	return true;
 }
 
-static void deallocate_em_cluster(struct pixel_em_cluster *dst)
+static void deallocate_em_cluster(struct pixel_em_cluster *dst, bool from_update)
 {
 	kfree(dst->opps);
 	dst->opps = NULL;
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+	if (!from_update)
+		kfree(dst->scaling_factor_table);
+	dst->scaling_factor_table = NULL;
+#endif
 }
 
 // Returns a valid pixel_em_profile based on default system parameters. This
@@ -553,13 +869,12 @@ static struct pixel_em_profile *generate_default_em_profile(const char *name)
 	while (!cpumask_empty(&unmatched_cpus)) {
 		int first_cpu = cpumask_first(&unmatched_cpus);
 		struct em_perf_domain *pd = em_cpu_get(first_cpu);
+		// pd is guaranteed not to be NULL, as pixel_em_count_clusters completed earlier.
 		int pd_cpu;
-		// pd is guaranteed not to be NULL, as pixel_em_init_cpu_layout completed earlier.
-		BUG_ON(pd == NULL);
 
 		if (!generate_em_cluster(&res->clusters[current_cluster_id], pd)) {
 			do {
-				deallocate_em_cluster(&res->clusters[current_cluster_id]);
+				deallocate_em_cluster(&res->clusters[current_cluster_id], false);
 			} while (--current_cluster_id >= 0);
 			goto failed_cluster_generation;
 		}
@@ -593,6 +908,33 @@ failed_res_allocation:
 }
 
 #if IS_ENABLED(CONFIG_VH_SCHED)
+
+static bool generate_idle_em_cluster(struct pixel_em_cluster *dst, struct em_perf_domain *pd)
+{
+	int opp_id;
+
+	cpumask_copy(&dst->cpus, em_span_cpus(pd));
+
+	dst->num_opps = pd->nr_perf_states;
+
+	dst->idle_opps = kcalloc(dst->num_opps, sizeof(*dst->idle_opps), GFP_KERNEL);
+	if (!dst->idle_opps)
+		return false;
+
+	for (opp_id = 0; opp_id < pd->nr_perf_states; opp_id++) {
+		dst->idle_opps[opp_id].freq = pd->table[opp_id].frequency;
+		dst->idle_opps[opp_id].energy = 0;
+	}
+
+	return true;
+}
+
+static void deallocate_idle_em_cluster(struct pixel_em_cluster *dst)
+{
+	kfree(dst->idle_opps);
+	dst->idle_opps = NULL;
+}
+
 static struct pixel_idle_em *generate_idle_em(void)
 {
 	struct pixel_idle_em *idle_em;
@@ -614,19 +956,17 @@ static struct pixel_idle_em *generate_idle_em(void)
 	if (!idle_em->cpu_to_cluster)
 		goto failed_cpu_to_cluster_allocation;
 
-
 	cpumask_copy(&unmatched_cpus, cpu_possible_mask);
 
 	while (!cpumask_empty(&unmatched_cpus)) {
 		int first_cpu = cpumask_first(&unmatched_cpus);
 		struct em_perf_domain *pd = em_cpu_get(first_cpu);
+		// pd is guaranteed not to be NULL, as pixel_em_count_clusters completed earlier.
 		int pd_cpu;
-		// pd is guaranteed not to be NULL, as pixel_em_init_cpu_layout completed earlier.
-		BUG_ON(pd == NULL);
 
-		if (!generate_em_cluster(&idle_em->clusters[current_cluster_id], pd)) {
+		if (!generate_idle_em_cluster(&idle_em->clusters[current_cluster_id], pd)) {
 			do {
-				deallocate_em_cluster(&idle_em->clusters[current_cluster_id]);
+				deallocate_idle_em_cluster(&idle_em->clusters[current_cluster_id]);
 			} while (--current_cluster_id >= 0);
 			goto failed_cluster_generation;
 		}
@@ -689,7 +1029,7 @@ static bool parse_idle_em_body(struct pixel_idle_em *idle_em, const char *idle_e
 			pr_debug("Setting active CPU to %d...\n", current_cpu_id);
 		} else if (skipped_blanks[0] != '\0' && skipped_blanks[0] != '}') {
 			unsigned int freq = 0;
-			unsigned int power = 0;
+			unsigned int energy = 0;
 
 			if (current_cpu_id == -1) {
 				pr_err("Error: no CPU id specified before parsing '%s'!\n",
@@ -697,20 +1037,20 @@ static bool parse_idle_em_body(struct pixel_idle_em *idle_em, const char *idle_e
 				ret = -EINVAL;
 				goto early_return;
 			}
-			if (sscanf(skipped_blanks, "%u %u", &freq, &power) != 2) {
+			if (sscanf(skipped_blanks, "%u %u", &freq, &energy) != 2) {
 				pr_err("Error when parsing '%s'!\n", skipped_blanks);
 				ret = -EINVAL;
 				goto early_return;
 			}
-			if (freq == 0 || power == 0) {
+			if (freq == 0 || energy == 0) {
 				pr_err("Illegal freq/power combination specified: %u, %u.\n",
 				       freq,
-				       power);
+				       energy);
 				ret = -EINVAL;
 				goto early_return;
 			}
 
-			update_idle_em_entry(idle_em, current_cpu_id, freq, power);
+			update_idle_em_entry(idle_em, current_cpu_id, freq, energy);
 		}
 	}
 
@@ -728,7 +1068,7 @@ static int parse_idle_em(struct pixel_idle_em *idle_em, const struct device_node
 	int ret;
 	const char *idle_em_body;
 
-	ret = of_property_read_string(np, "idle_power", &idle_em_body);
+	ret = of_property_read_string(np, "idle_energy", &idle_em_body);
 
 	if (ret == 0) {
 		ret = parse_idle_em_body(idle_em, idle_em_body, strlen(idle_em_body));
@@ -814,6 +1154,137 @@ static struct kobj_attribute active_profile_attr = __ATTR(active_profile,
 							  sysfs_active_profile_show,
 							  sysfs_active_profile_store);
 
+#if IS_ENABLED(CONFIG_VH_SCHED)
+
+static ssize_t sysfs_idle_profile_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	ssize_t res = 0;
+	int cluster_id;
+
+	mutex_lock(&sysfs_lock);
+
+	res = sysfs_emit(buf, "idle\n");
+
+	if (idle_profile != NULL) {
+		for (cluster_id = 0; cluster_id < idle_profile->num_clusters; cluster_id++) {
+			int opp_id;
+			int first_cpu = cpumask_first(&idle_profile->clusters[cluster_id].cpus);
+
+			res += sysfs_emit_at(buf, res, "cpu%d {\n", first_cpu);
+
+			for (opp_id = 0;
+				opp_id < idle_profile->clusters[cluster_id].num_opps;
+				opp_id++)
+				res += sysfs_emit_at(buf,
+							res,
+							"%u %u\n",
+							idle_profile->clusters[cluster_id].idle_opps[opp_id].freq,
+							idle_profile->clusters[cluster_id].idle_opps[opp_id].energy);
+		}
+
+		res += sysfs_emit_at(buf, res, "}\n");
+	}
+
+	mutex_unlock(&sysfs_lock);
+	return res;
+}
+
+static ssize_t sysfs_idle_profile_store(struct kobject *kobj,
+					  struct kobj_attribute *attr,
+					  const char *buf,
+					  size_t count)
+{
+	int res = 0;
+	bool parse_result;
+	struct pixel_idle_em *new_idle_profile = NULL;
+
+	mutex_lock(&sysfs_lock);
+
+	new_idle_profile = generate_idle_em();
+	if (new_idle_profile == NULL) {
+		pr_err("Pixel idle em not generated!\n");
+		res = -ENOMEM;
+		goto unlock;
+	}
+	parse_result = parse_idle_em_body(new_idle_profile, buf, count);
+	if (parse_result) {
+		struct pixel_idle_em *old_idle_profile = idle_profile;
+		unsigned long flags;
+		idle_profile = new_idle_profile;
+		raw_spin_lock_irqsave(&vendor_sched_pixel_em_lock, flags);
+		WRITE_ONCE(vendor_sched_pixel_idle_em, idle_profile);
+		raw_spin_unlock_irqrestore(&vendor_sched_pixel_em_lock, flags);
+		pixel_em_free_idle(old_idle_profile);
+		res = count;
+	} else {
+		res = -EINVAL;
+	}
+
+unlock:
+	mutex_unlock(&sysfs_lock);
+
+	return res;
+}
+
+static struct kobj_attribute idle_profile_attr = __ATTR(idle_profile,
+							  0664,
+							  sysfs_idle_profile_show,
+							  sysfs_idle_profile_store);
+
+
+static ssize_t sysfs_idle_profile_enable_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	ssize_t res = 0;
+
+	mutex_lock(&sysfs_lock);
+
+	if (READ_ONCE(vendor_sched_pixel_idle_em) != NULL) {
+		res = sysfs_emit(buf, "1\n");
+	} else {
+		res = sysfs_emit(buf, "0\n");
+	}
+
+	mutex_unlock(&sysfs_lock);
+	return res;
+}
+
+static ssize_t sysfs_idle_profile_enable_store(struct kobject *kobj,
+					  struct kobj_attribute *attr,
+					  const char *buf,
+					  size_t count)
+{
+	unsigned long flags;
+	bool enable;
+	int res = kstrtobool(buf, &enable);
+	if (res) {
+		return res;
+	}
+
+	mutex_lock(&sysfs_lock);
+
+	raw_spin_lock_irqsave(&vendor_sched_pixel_em_lock, flags);
+	if (enable) {
+		WRITE_ONCE(vendor_sched_pixel_idle_em, idle_profile);
+	} else {
+		WRITE_ONCE(vendor_sched_pixel_idle_em, NULL);
+	}
+	raw_spin_unlock_irqrestore(&vendor_sched_pixel_em_lock, flags);
+
+	mutex_unlock(&sysfs_lock);
+
+	return count;
+}
+
+static struct kobj_attribute idle_profile_enable_attr = __ATTR(idle_profile_enable,
+							  0664,
+							  sysfs_idle_profile_enable_show,
+							  sysfs_idle_profile_enable_store);
+#endif
+
 struct profile_sysfs_helper {
 	struct kobj_attribute kobj_attr;
 	struct pixel_em_profile *profile;
@@ -834,17 +1305,55 @@ static ssize_t sysfs_profile_show(struct kobject *kobj, struct kobj_attribute *a
 		int first_cpu = cpumask_first(&profile->clusters[cluster_id].cpus);
 
 		res += sysfs_emit_at(buf, res, "cpu%d {\n", first_cpu);
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+		if (profile->clusters[cluster_id].voltage_table)
+			res += sysfs_emit_at(buf, res, "voltage_table=y\n");
 
+		if (profile->clusters[cluster_id].voltage_scaling_target != -1)
+			res += sysfs_emit_at(buf, res, "voltage_scaling_target=%d\n",
+					     profile->clusters[cluster_id].voltage_scaling_target);
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+		if (profile->clusters[cluster_id].frequency_scaling_table)
+			res += sysfs_emit_at(buf, res, "frequency_scaling_table=y\n");
+
+		if (profile->clusters[cluster_id].frequency_scaling_target != -1)
+			res += sysfs_emit_at(buf, res, "frequency_scaling_target=%d\n",
+					    profile->clusters[cluster_id].frequency_scaling_target);
+
+		if (profile->clusters[cluster_id].constraint_type != CONSTRAINT_NONE) {
+			if (profile->clusters[cluster_id].constraint_type == CONSTRAINT_MIN)
+				res += sysfs_emit_at(buf, res, "constraint_type=min\n");
+			else
+				res += sysfs_emit_at(buf, res, "constraint_type=max\n");
+		}
+#endif
 		for (opp_id = 0;
 		     opp_id < profile->clusters[cluster_id].num_opps;
-		     opp_id++)
+		     opp_id++) {
 			res += sysfs_emit_at(buf,
 					     res,
-					     "%u %d %d\n",
+					     "%u %u %u %lu %d",
 					     profile->clusters[cluster_id].opps[opp_id].freq,
 					     profile->clusters[cluster_id].opps[opp_id].capacity,
-					     profile->clusters[cluster_id].opps[opp_id].power);
-
+					     profile->clusters[cluster_id].opps[opp_id].power,
+					     profile->clusters[cluster_id].opps[opp_id].cost,
+					     profile->clusters[cluster_id].opps[opp_id].inefficient
+					     );
+#if IS_ENABLED(CONFIG_PIXEL_EM_VOLTAGE_SCALING)
+			if (profile->clusters[cluster_id].voltage_table) {
+				res += sysfs_emit_at(buf, res, " %lu",
+					profile->clusters[cluster_id].opps[opp_id].voltage);
+			}
+#endif
+#if IS_ENABLED(CONFIG_PIXEL_EM_FREQUENCY_SCALING)
+			if (profile->clusters[cluster_id].frequency_scaling_table) {
+				res += sysfs_emit_at(buf, res, " %d",
+					profile->clusters[cluster_id].opps[opp_id].scaling_freq);
+			}
+#endif
+			res += sysfs_emit_at(buf, res, "\n");
+		}
 		res += sysfs_emit_at(buf, res, "}\n");
 	}
 	mutex_unlock(&sysfs_lock);
@@ -892,7 +1401,7 @@ static void pixel_em_unpublish_profile(struct pixel_em_profile *profile)
 	profile->sysfs_helper = NULL;
 }
 
-static void pixel_em_free_profile(struct pixel_em_profile *profile)
+static void pixel_em_free_profile(struct pixel_em_profile *profile, bool from_update)
 {
 	int cluster_id;
 
@@ -911,7 +1420,7 @@ static void pixel_em_free_profile(struct pixel_em_profile *profile)
 	kfree(profile->name);
 
 	for (cluster_id = 0; cluster_id < profile->num_clusters; cluster_id++) {
-		deallocate_em_cluster(&profile->clusters[cluster_id]);
+		deallocate_em_cluster(&profile->clusters[cluster_id], from_update);
 	}
 	kfree(profile->clusters);
 	kfree(profile->cpu_to_cluster);
@@ -927,7 +1436,7 @@ static void pixel_em_free_idle(struct pixel_idle_em *idle_em)
 		return;
 
 	for (cluster_id = 0; cluster_id < idle_em->num_clusters; cluster_id++) {
-		deallocate_em_cluster(&idle_em->clusters[cluster_id]);
+		deallocate_idle_em_cluster(&idle_em->clusters[cluster_id]);
 	}
 	kfree(idle_em->clusters);
 	kfree(idle_em->cpu_to_cluster);
@@ -940,6 +1449,10 @@ static void pixel_em_clean_up_sysfs_nodes(void)
 	if (!primary_sysfs_folder)
 		return;
 
+#if IS_ENABLED(CONFIG_VH_SCHED)
+	sysfs_remove_file(primary_sysfs_folder, &idle_profile_attr.attr);
+	sysfs_remove_file(primary_sysfs_folder, &idle_profile_enable_attr.attr);
+#endif
 	sysfs_remove_file(primary_sysfs_folder, &active_profile_attr.attr);
 	sysfs_remove_file(primary_sysfs_folder, &write_profile_attr.attr);
 
@@ -949,7 +1462,7 @@ static void pixel_em_clean_up_sysfs_nodes(void)
 
 		list_for_each_safe(pos, tmp, &profile_list) {
 			profile = list_entry(pos, struct pixel_em_profile, list);
-			pixel_em_free_profile(profile);
+			pixel_em_free_profile(profile, false);
 		}
 		kobject_put(profiles_sysfs_folder);
 		profiles_sysfs_folder = NULL;
@@ -989,6 +1502,18 @@ static int pixel_em_initialize_sysfs_nodes(void)
 		return -EINVAL;
 	}
 
+#if IS_ENABLED(CONFIG_VH_SCHED)
+	if (sysfs_create_file(primary_sysfs_folder, &idle_profile_attr.attr)) {
+		pr_err("Failed to create idle_profile file!\n");
+		return -EINVAL;
+	}
+
+	if (sysfs_create_file(primary_sysfs_folder, &idle_profile_enable_attr.attr)) {
+		pr_err("Failed to create idle_profile_enable file!\n");
+		return -EINVAL;
+	}
+#endif
+
 	return 0;
 }
 
@@ -999,13 +1524,9 @@ static void pixel_em_drv_undo_probe(void)
 
 	pixel_em_clean_up_sysfs_nodes();
 #if IS_ENABLED(CONFIG_VH_SCHED)
-	pixel_em_free_idle(vendor_sched_pixel_idle_em);
+	pixel_em_free_idle(idle_profile);
+	idle_profile = NULL;
 	vendor_sched_pixel_idle_em = NULL;
-#else
-	if (pixel_cluster_start_cpu) {
-		kfree(pixel_cluster_start_cpu);
-		pixel_cluster_start_cpu = NULL;
-	}
 #endif
 
 	if (!platform_dev) {
@@ -1024,6 +1545,7 @@ static int pixel_em_drv_probe(struct platform_device *dev)
 	int res;
 	struct pixel_em_profile *default_profile;
 	int num_dt_profiles;
+	unsigned long flags;
 	int i;
 
 	mutex_init(&sysfs_lock);
@@ -1043,16 +1565,19 @@ static int pixel_em_drv_probe(struct platform_device *dev)
 	}
 
 #if IS_ENABLED(CONFIG_VH_SCHED)
-	vendor_sched_pixel_idle_em = generate_idle_em();
-	if (vendor_sched_pixel_idle_em == NULL)
-		pr_info("Pixel idle em not generated!\n");
+	idle_profile = generate_idle_em();
+	if (idle_profile == NULL)
+		pr_warn("Pixel idle em not generated!\n");
 
-	if (vendor_sched_pixel_idle_em &&
-	    parse_idle_em(vendor_sched_pixel_idle_em, dev->dev.of_node) < 0) {
-		pixel_em_free_idle(vendor_sched_pixel_idle_em);
-		vendor_sched_pixel_idle_em = NULL;
-		pr_info("Pixel idle em not parsed!\n");
+	if (idle_profile &&
+	    parse_idle_em(idle_profile, dev->dev.of_node) < 0) {
+		pixel_em_free_idle(idle_profile);
+		idle_profile = NULL;
+		pr_warn("Pixel idle em not parsed!\n");
 	}
+	raw_spin_lock_irqsave(&vendor_sched_pixel_em_lock, flags);
+	WRITE_ONCE(vendor_sched_pixel_idle_em, idle_profile);
+	raw_spin_unlock_irqrestore(&vendor_sched_pixel_em_lock, flags);
 #endif
 
 	res = pixel_em_initialize_sysfs_nodes();
@@ -1110,9 +1635,11 @@ static int pixel_em_drv_probe(struct platform_device *dev)
 	return 0;
 }
 
-static void pixel_em_drv_remove(struct platform_device *dev)
+static int pixel_em_drv_remove(struct platform_device *dev)
 {
 	pixel_em_drv_undo_probe();
+
+	return 0;
 }
 
 static const struct of_device_id pixel_em_of_match[] = {
