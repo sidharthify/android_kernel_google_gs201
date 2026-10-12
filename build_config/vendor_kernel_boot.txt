@@ -29,14 +29,10 @@ pixel-boot-metrics.ko
 pixel-suspend-diag.ko
 sjtag-driver.ko
 etm2dram.ko
-vh_sched.ko
-sched_tp.ko
-vh_preemptirq_long.ko
 systrace.ko
 vh_fs.ko
 vh_mm.ko
 vh_cgroup.ko
-pixel_em.ko
 vh_thermal.ko
 pixel_metrics.ko
 gs-chipid.ko
@@ -207,3 +203,7 @@ memlat-devfreq.ko
 page_pool.ko
 s2mpu-passthrough.ko
 trusty-test.ko
+sched_tp.ko
+pixel_em.ko
+vh_sched.ko
+vh_preemptirq_long.ko
