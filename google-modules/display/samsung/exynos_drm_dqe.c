@@ -1507,7 +1507,6 @@ static enum dqe_version exynos_get_dqe_version(void)
 	return dqe_ver;
 }
 
-#define MAX_DQE_NAME_SIZE 10
 struct exynos_dqe *exynos_dqe_register(struct decon_device *decon)
 {
 	struct resource res;
@@ -1516,7 +1515,7 @@ struct exynos_dqe *exynos_dqe_register(struct decon_device *decon)
 	struct exynos_dqe *dqe;
 	enum dqe_version dqe_version;
 	int i;
-	char dqe_name[MAX_DQE_NAME_SIZE] = "dqe";
+	const char *dqe_name;
 
 	i = of_property_match_string(np, "reg-names", "dqe");
 	if (i < 0) {
@@ -1561,7 +1560,10 @@ struct exynos_dqe *exynos_dqe_register(struct decon_device *decon)
 	spin_lock_init(&dqe->state.histogram_slock);
 	INIT_LIST_HEAD(&dqe->state.hist_pending_events_list);
 
-	scnprintf(dqe_name, MAX_DQE_NAME_SIZE, "dqe%u", decon->id);
+	/* the class keeps this pointer, so it must outlive the probe */
+	dqe_name = devm_kasprintf(dev, GFP_KERNEL, "dqe%u", decon->id);
+	if (!dqe_name)
+		return NULL;
 	dqe->dqe_class = class_create(dqe_name);
 	if (IS_ERR(dqe->dqe_class)) {
 		pr_err("failed to create dqe class\n");
