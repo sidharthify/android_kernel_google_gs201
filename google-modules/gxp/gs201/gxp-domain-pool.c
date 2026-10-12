@@ -59,6 +59,12 @@ gxp_domain_pool_alloc(struct gcip_iommu_domain_pool *pool)
 	if (IS_ERR_OR_NULL(gdomain))
 		return NULL;
 
+	/*
+	 * Since Linux 6.8 faults are reported to the faulting domain only, so
+	 * virtual device (PASID) domains need the handler as well.
+	 */
+	iommu_set_fault_handler(gdomain->domain, gxp_iommu_fault_handler, NULL);
+
 	return gdomain;
 }
 

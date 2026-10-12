@@ -55,6 +55,10 @@ struct gxp_dma_manager {
  */
 int gxp_dma_init(struct gxp_dev *gxp);
 
+/* IOMMU fault handler for the default and the virtual device domains. */
+int gxp_iommu_fault_handler(struct iommu_domain *domain, struct device *dev,
+			    unsigned long iova, int flags, void *token);
+
 /**
  * gxp_dma_exit() - Tear down the GXP DMA subsystem and release hardware
  * @gxp: The GXP device to tear down DMA for

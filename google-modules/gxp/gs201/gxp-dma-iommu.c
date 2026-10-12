@@ -32,13 +32,17 @@ struct gxp_dma_iommu_manager {
 
 /* Fault handler */
 
-static int iommu_fault_handler(struct iommu_domain *domain, struct device *dev,
-			       unsigned long iova, int flags, void *token)
+int gxp_iommu_fault_handler(struct iommu_domain *domain, struct device *dev,
+			    unsigned long iova, int flags, void *token)
 {
 	dev_err(dev, "IOMMU fault on address %08lX, flags = %08X\n", iova, flags);
 
-	/* Tell the IOMMU driver we are OK with this fault. */
-	return 0;
+	/*
+	 * Tell the IOMMU driver to carry on. The Samsung SysMMU driver only
+	 * treats a fault as handled on -EAGAIN and panics otherwise, which is
+	 * what the per-device fault handler returned before Linux 6.8.
+	 */
+	return -EAGAIN;
 }
 
 #if GXP_HAS_LAP
@@ -103,7 +107,7 @@ int gxp_dma_init(struct gxp_dev *gxp)
 		return PTR_ERR(mgr->default_domain);
 	}
 
-	iommu_set_fault_handler(mgr->default_domain->domain, iommu_fault_handler, gxp->dev);
+	iommu_set_fault_handler(mgr->default_domain->domain, gxp_iommu_fault_handler, gxp->dev);
 
 	gxp->dma_mgr = &(mgr->dma_mgr);
 
