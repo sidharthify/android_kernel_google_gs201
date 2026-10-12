@@ -136,10 +136,14 @@ static int edgetpu_iommu_fault_handler(struct iommu_domain *domain,
 	struct edgetpu_iommu_domain *etdomain =
 		(struct edgetpu_iommu_domain *)token;
 
-	dev_dbg(dev, "IOMMU fault on address %08lX. PASID = %u flags = %08X",
-		iova, etdomain->pasid, flags);
-	// Tell the IOMMU driver we are OK with this fault
-	return 0;
+	dev_warn(dev, "IOMMU fault on address %08lX. PASID = %u flags = %08X\n",
+		 iova, etdomain->pasid, flags);
+	/*
+	 * Tell the IOMMU driver to carry on. The Samsung SysMMU driver only
+	 * treats a fault as handled on -EAGAIN and panics otherwise, which is
+	 * what the per-device fault handler returned before Linux 6.8.
+	 */
+	return -EAGAIN;
 }
 
 static void edgetpu_init_etdomain(struct edgetpu_iommu_domain *etdomain,
