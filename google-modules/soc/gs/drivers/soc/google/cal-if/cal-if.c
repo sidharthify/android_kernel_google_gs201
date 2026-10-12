@@ -41,6 +41,9 @@ EXPORT_SYMBOL(exynos_cal_pd_bcm_sync);
 
 static DEFINE_SPINLOCK(pmucal_cpu_lock);
 
+// The first parameter is cluster id, the second parameter is enable/disable.
+static void (*set_cluster_enabled_cb)(int, int);
+
 unsigned int cal_clk_is_enabled(unsigned int id)
 {
 	return 0;
@@ -324,6 +327,14 @@ int cal_cpu_status(unsigned int cpu)
 }
 EXPORT_SYMBOL_GPL(cal_cpu_status);
 
+void register_set_cluster_enabled_cb(void (*func)(int, int))
+{
+	// This function could only be registered once.
+	BUG_ON(set_cluster_enabled_cb);
+	set_cluster_enabled_cb = func;
+}
+EXPORT_SYMBOL_GPL(register_set_cluster_enabled_cb);
+
 int cal_cluster_enable(unsigned int cluster)
 {
 	int ret;
@@ -332,6 +343,9 @@ int cal_cluster_enable(unsigned int cluster)
 	spin_lock(&pmucal_cpu_lock);
 	ret = pmucal_cpu_cluster_enable(cluster);
 	spin_unlock(&pmucal_cpu_lock);
+
+	if (likely(ret == 0 && set_cluster_enabled_cb))
+		set_cluster_enabled_cb(cluster, 1);
 
 	scnprintf(clock_name, 32, "CAL_CLUSTER_ENABLE_%u", cluster);
 	trace_clock_set_rate(clock_name, 1, raw_smp_processor_id());
@@ -349,6 +363,8 @@ int cal_cluster_disable(unsigned int cluster)
 	ret = pmucal_cpu_cluster_disable(cluster);
 	spin_unlock(&pmucal_cpu_lock);
 
+	if (likely(ret == 0 && set_cluster_enabled_cb))
+		set_cluster_enabled_cb(cluster, 0);
 
 	scnprintf(clock_name, 32, "CAL_CLUSTER_ENABLE_%u", cluster);
 	trace_clock_set_rate(clock_name, 0, raw_smp_processor_id());
