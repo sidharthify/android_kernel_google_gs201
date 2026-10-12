@@ -315,7 +315,7 @@ static int __find_lowest_rq(struct task_struct *p, struct cpumask *lowest_mask,
 		return cpumask_first(p->cpus_ptr);
 	}
 
-	ret = cpupri_find_fitness(&task_rq(p)->rd->cpupri, p, lowest_mask, NULL);
+	ret = cpupri_find_fitness(&task_rq(p)->rd->cpupri, p, p, lowest_mask, NULL);
 	if (!ret) {
 		return -1;
 	}
@@ -373,7 +373,7 @@ static int find_lowest_rq(struct task_struct *p, struct cpumask *backup_mask)
 }
 
 void rvh_find_lowest_rq_pixel_mod(void *data, struct task_struct *p,
-				  struct cpumask *lowest_mask,
+				  struct task_struct *exec_ctx, struct cpumask *lowest_mask,
 				  int ret, int *cpu)
 
 {

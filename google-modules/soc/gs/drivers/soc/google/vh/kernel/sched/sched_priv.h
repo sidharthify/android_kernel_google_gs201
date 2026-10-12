@@ -1,6 +1,101 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/sched/clock.h>
 #include "../../include/sched.h"
+
+/*
+ * Linux 6.12 compatibility. The scheduler internals below were renamed or
+ * removed between 6.1 and 6.12:
+ *  - capacity_orig_of() and rq->cpu_capacity_orig: arch_scale_cpu_capacity() (6.8)
+ *  - arch_scale_thermal_pressure(): arch_scale_hw_pressure() (6.10)
+ *  - check_preempt_curr(): wakeup_preempt() (6.8)
+ *  - task_is_realtime(): rt_or_dl_task_policy() (6.12)
+ */
+#define capacity_orig_of(cpu)			arch_scale_cpu_capacity(cpu)
+#define arch_scale_thermal_pressure(cpu)	arch_scale_hw_pressure(cpu)
+#define check_preempt_curr(rq, p, flags)	wakeup_preempt(rq, p, flags)
+#define task_is_realtime(p)			rt_or_dl_task_policy(p)
+
+/*
+ * 6.8 reworked schedutil around effective_cpu_util(..., &min, &max) and
+ * dropped the util type and uclamp_rq_util_with(). The vendor governor
+ * keeps its own utilization model, so keep what it needs here.
+ */
+enum cpu_util_type {
+	FREQUENCY_UTIL,
+	ENERGY_UTIL,
+};
+
+static __always_inline
+unsigned long uclamp_rq_util_with(struct rq *rq, unsigned long util, struct task_struct *p)
+{
+	unsigned long min_util = 0;
+	unsigned long max_util = 0;
+
+	if (!uclamp_is_used())
+		return util;
+
+	if (p) {
+		min_util = uclamp_eff_value(p, UCLAMP_MIN);
+		max_util = uclamp_eff_value(p, UCLAMP_MAX);
+
+		/*
+		 * Ignore last runnable task's max clamp, as this task will
+		 * reset it. Similarly, no need to read the rq's min clamp.
+		 */
+		if (uclamp_rq_is_idle(rq))
+			goto out;
+	}
+
+	min_util = max_t(unsigned long, min_util, uclamp_rq_get(rq, UCLAMP_MIN));
+	max_util = max_t(unsigned long, max_util, uclamp_rq_get(rq, UCLAMP_MAX));
+out:
+	if (unlikely(min_util >= max_util))
+		return min_util;
+
+	return clamp(util, min_util, max_util);
+}
+
+/* 6.12 reweights through sched_class->reweight_task() */
+static inline void reweight_task(struct task_struct *p, int prio)
+{
+	struct load_weight lw = {
+		.weight = scale_load(sched_prio_to_weight[prio]),
+		.inv_weight = sched_prio_to_wmult[prio],
+	};
+
+	if (p->sched_class->reweight_task)
+		p->sched_class->reweight_task(task_rq(p), p, &lw);
+	else
+		p->se.load = lw;
+}
+
+/*
+ * EEVDF (6.6) replaced the CFS latency/granularity tunables with a single
+ * base slice. min_granularity maps to it; the other two have no effect any
+ * more but keep their procfs nodes working.
+ */
+#define sysctl_sched_min_granularity		sysctl_sched_base_slice
+extern unsigned int vh_sysctl_sched_latency;
+extern unsigned int vh_sysctl_sched_wakeup_granularity;
+#define sysctl_sched_latency			vh_sysctl_sched_latency
+#define sysctl_sched_wakeup_granularity		vh_sysctl_sched_wakeup_granularity
+
+/* 6.12's teo has no util-awareness; the procfs nodes just keep the value */
+extern unsigned long vh_teo_util_threshold[CONFIG_VH_SCHED_MAX_CPU_NR];
+static inline void teo_cpu_set_util_threshold(int cpu, unsigned long util)
+{
+	vh_teo_util_threshold[cpu] = util;
+}
+static inline unsigned long teo_cpu_get_util_threshold(int cpu)
+{
+	return vh_teo_util_threshold[cpu];
+}
+
+/* static in kernel/sched/fair.c */
+static inline unsigned long task_runnable(struct task_struct *p)
+{
+	return READ_ONCE(p->se.avg.runnable_avg);
+}
 #include "../drivers/android/binder_internal.h"
 #include <asm/atomic.h>
 
@@ -338,9 +433,7 @@ static inline unsigned long task_util(struct task_struct *p)
 
 static inline unsigned long _task_util_est(struct task_struct *p)
 {
-	struct util_est ue = READ_ONCE(p->se.avg.util_est);
-
-	return max(ue.ewma, (ue.enqueued & ~UTIL_AVG_UNCHANGED));
+	return READ_ONCE(p->se.avg.util_est) & ~UTIL_AVG_UNCHANGED;
 }
 
 static inline unsigned long task_util_est(struct task_struct *p)
@@ -351,21 +444,6 @@ static inline unsigned long task_util_est(struct task_struct *p)
 static inline unsigned long capacity_of(int cpu)
 {
 	return cpu_rq(cpu)->cpu_capacity;
-}
-
-static inline unsigned int uclamp_none(enum uclamp_id clamp_id)
-{
-	if (clamp_id == UCLAMP_MIN)
-		return 0;
-	return SCHED_CAPACITY_SCALE;
-}
-
-static inline void uclamp_se_set(struct uclamp_se *uc_se,
-				 unsigned int value, bool user_defined)
-{
-	uc_se->value = value;
-	uc_se->bucket_id = get_bucket_id(value);
-	uc_se->user_defined = user_defined;
 }
 
 extern inline void uclamp_rq_inc_id(struct rq *rq, struct task_struct *p,
@@ -1252,10 +1330,9 @@ static inline void __update_util_est_invariance(struct rq *rq,
 	if (!do_update)
 		return;
 
-	se_enqueued = READ_ONCE(se->avg.util_est.enqueued) & ~UTIL_AVG_UNCHANGED;
-	se_enqueued = max_t(unsigned long, se->avg.util_est.ewma, se_enqueued);
+	se_enqueued = READ_ONCE(se->avg.util_est) & ~UTIL_AVG_UNCHANGED;
 
-	cfs_rq_enqueued = READ_ONCE(cfs_rq->avg.util_est.enqueued);
+	cfs_rq_enqueued = READ_ONCE(cfs_rq->avg.util_est);
 
 	if (update_cfs_rq) {
 #if IS_ENABLED(CONFIG_USE_VENDOR_GROUP_UTIL)
@@ -1266,12 +1343,12 @@ static inline void __update_util_est_invariance(struct rq *rq,
 		lsub_positive(&cfs_rq_enqueued, se_enqueued);
 	}
 
-	WRITE_ONCE(se->avg.util_est.enqueued, new_util_est);
+	WRITE_ONCE(se->avg.util_est, new_util_est);
 	trace_sched_util_est_se_tp(se);
 
 	if (update_cfs_rq) {
 		cfs_rq_enqueued += new_util_est;
-		WRITE_ONCE(cfs_rq->avg.util_est.enqueued, cfs_rq_enqueued);
+		WRITE_ONCE(cfs_rq->avg.util_est, cfs_rq_enqueued);
 		trace_sched_util_est_cfs_tp(cfs_rq);
 
 #if IS_ENABLED(CONFIG_USE_VENDOR_GROUP_UTIL)

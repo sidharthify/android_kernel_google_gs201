@@ -206,8 +206,7 @@ void rvh_enqueue_task_pixel_mod(void *data, struct rq *rq, struct task_struct *p
 
 	if (static_branch_likely(&auto_dvfs_headroom_enable)) {
 		if (vg[get_vendor_group(p)].disable_util_est) {
-			p->se.avg.util_est.enqueued = 0;
-			p->se.avg.util_est.ewma = 0;
+			WRITE_ONCE(p->se.avg.util_est, 0);
 		}
 	}
 

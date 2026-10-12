@@ -103,29 +103,6 @@ extern void rvh_uclamp_eff_get_pixel_mod(void *data, struct task_struct *p, enum
 #define for_each_clamp_id(clamp_id) \
 	for ((clamp_id) = 0; (clamp_id) < UCLAMP_CNT; (clamp_id)++)
 
-static void attach_task(struct rq *rq, struct task_struct *p)
-{
-	lockdep_assert_held(&rq->__lock);
-
-	BUG_ON(task_rq(p) != rq);
-	activate_task(rq, p, ENQUEUE_NOCLOCK);
-	check_preempt_curr(rq, p, 0);
-}
-
-/*
- * attach_one_task() -- attaches the task returned from detach_one_task() to
- * its new rq.
- */
-static void attach_one_task(struct rq *rq, struct task_struct *p)
-{
-	struct rq_flags rf;
-
-	rq_lock(rq, &rf);
-	update_rq_clock(rq);
-	attach_task(rq, p);
-	rq_unlock(rq, &rf);
-}
-
 static inline u64 cfs_rq_last_update_time(struct cfs_rq *cfs_rq)
 {
 	return u64_u32_load_copy(cfs_rq->avg.last_update_time,
@@ -150,7 +127,7 @@ static inline unsigned long uclamp_task_util(struct task_struct *p,
 
 static unsigned long capacity_curr_of(int cpu)
 {
-	unsigned long max_cap = cpu_rq(cpu)->cpu_capacity_orig;
+	unsigned long max_cap = arch_scale_cpu_capacity(cpu);
 
 	return cap_scale(max_cap, per_cpu(arch_freq_scale, cpu));
 }
@@ -183,52 +160,6 @@ static inline void update_load_add(struct load_weight *lw, unsigned long inc)
 #define WMULT_CONST	(~0U)
 #define WMULT_SHIFT	32
 
-static void __update_inv_weight(struct load_weight *lw)
-{
-	unsigned long w;
-
-	if (likely(lw->inv_weight))
-		return;
-
-	w = scale_load_down(lw->weight);
-
-	if (BITS_PER_LONG > 32 && unlikely(w >= WMULT_CONST))
-		lw->inv_weight = 1;
-	else if (unlikely(!w))
-		lw->inv_weight = WMULT_CONST;
-	else
-		lw->inv_weight = WMULT_CONST / w;
-}
-
-static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight *lw)
-{
-	u64 fact = scale_load_down(weight);
-	u32 fact_hi = (u32)(fact >> 32);
-	int shift = WMULT_SHIFT;
-	int fs;
-
-	__update_inv_weight(lw);
-
-	if (unlikely(fact_hi)) {
-		fs = fls(fact_hi);
-		shift -= fs;
-		fact >>= fs;
-	}
-
-	fact = mul_u32_u32(fact, lw->inv_weight);
-
-	fact_hi = (u32)(fact >> 32);
-	if (fact_hi) {
-		fs = fls(fact_hi);
-		shift -= fs;
-		fact >>= fs;
-	}
-
-	return mul_u64_u32_shr(delta_exec, fact, shift);
-}
-
-static u64 __sched_period(unsigned long nr_running);
-
 #define for_each_sched_entity(se) \
 		for (; se; se = se->parent)
 
@@ -256,51 +187,10 @@ static int se_is_idle(struct sched_entity *se)
 }
 #endif
 
-static bool sched_idle_cfs_rq(struct cfs_rq *cfs_rq)
-{
-	return cfs_rq->nr_running &&
-		cfs_rq->nr_running == cfs_rq->idle_nr_running;
-}
-
 u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	unsigned int nr_running = cfs_rq->nr_running;
-	struct sched_entity *init_se = se;
-	unsigned int min_gran;
-	u64 slice;
-
-	if (sched_feat(ALT_PERIOD))
-		nr_running = rq_of(cfs_rq)->cfs.h_nr_running;
-
-	slice = __sched_period(nr_running + !se->on_rq);
-
-	for_each_sched_entity(se) {
-		struct load_weight *load;
-		struct load_weight lw;
-		struct cfs_rq *qcfs_rq;
-
-		qcfs_rq = cfs_rq_of(se);
-		load = &qcfs_rq->load;
-
-		if (unlikely(!se->on_rq)) {
-			lw = qcfs_rq->load;
-
-			update_load_add(&lw, se->load.weight);
-			load = &lw;
-		}
-		slice = __calc_delta(slice, se->load.weight, load);
-	}
-
-	if (sched_feat(BASE_SLICE)) {
-		if (se_is_idle(init_se) && !sched_idle_cfs_rq(cfs_rq))
-			min_gran = sysctl_sched_idle_min_granularity;
-		else
-			min_gran = sysctl_sched_min_granularity;
-
-		slice = max_t(u64, slice, min_gran);
-	}
-
-	return slice;
+	/* EEVDF: every entity has its own request size */
+	return se->slice;
 }
 
 void set_next_buddy(struct sched_entity *se)
@@ -312,11 +202,6 @@ void set_next_buddy(struct sched_entity *se)
 			return;
 		cfs_rq_of(se)->next = se;
 	}
-}
-
-static inline struct task_group *css_tg(struct cgroup_subsys_state *css)
-{
-	return css ? container_of(css, struct task_group, css) : NULL;
 }
 
 static inline unsigned int
@@ -1414,11 +1299,11 @@ static inline unsigned long em_cpu_energy_pixel_mod(struct em_perf_domain *pd,
 #endif
 
 	scale_cpu = arch_scale_cpu_capacity(cpu);
-	ps = &pd->table[pd->nr_perf_states - 1];
+	ps = &pixel_em_table(pd)[pd->nr_perf_states - 1];
 	freq = map_util_freq_pixel_mod(max_util, ps->frequency, scale_cpu, cpu);
 
 	for (i = 0; i < pd->nr_perf_states; i++) {
-		ps = &pd->table[i];
+		ps = &pixel_em_table(pd)[i];
 		if (ps->frequency >= freq && !(ps->flags & EM_PERF_STATE_INEFFICIENT))
 			break;
 	}
@@ -1608,17 +1493,6 @@ static void get_uclamp_on_nice(struct task_struct *p, enum uclamp_id clamp_id,
  * This part of code is vendor hook functions, which modify or extend the original
  * functions.
  */
-
-static u64 __sched_period(unsigned long nr_running)
-{
-	unsigned int sched_nr_latency = DIV_ROUND_UP(sysctl_sched_latency,
-					sysctl_sched_min_granularity);
-
-	if (unlikely(nr_running > sched_nr_latency))
-		return nr_running * sysctl_sched_min_granularity;
-	else
-		return sysctl_sched_latency;
-}
 
 int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu,
 		cpumask_t *valid_mask)
@@ -2370,14 +2244,13 @@ void initialize_vendor_group_property(void)
 
 void rvh_check_preempt_wakeup_pixel_mod(void *data, struct rq *rq, struct task_struct *p,
 			bool *preempt, bool *nopreempt, int wake_flags, struct sched_entity *se,
-			struct sched_entity *pse, int next_buddy_marked, unsigned int granularity)
+			struct sched_entity *pse)
 {
 	if (!entity_is_task(se) || !entity_is_task(pse))
 		return;
 
 	if(!get_preempt_wakeup(task_of(se)) && get_preempt_wakeup(task_of(pse))) {
-		if (!next_buddy_marked)
-			set_next_buddy(pse);
+		set_next_buddy(pse);
 
 		*preempt = true;
 		return;
@@ -2388,8 +2261,7 @@ void rvh_check_preempt_wakeup_pixel_mod(void *data, struct rq *rq, struct task_s
 void rvh_util_est_update_pixel_mod(void *data, struct cfs_rq *cfs_rq, struct task_struct *p,
 				    bool task_sleep, int *ret)
 {
-	long last_ewma_diff, last_enqueued_diff;
-	struct util_est ue;
+	unsigned int ewma, dequeued, last_ewma_diff;
 
 	*ret = 1;
 
@@ -2401,8 +2273,7 @@ void rvh_util_est_update_pixel_mod(void *data, struct cfs_rq *cfs_rq, struct tas
 		unsigned int rampup_multiplier = get_rampup_multiplier(p);
 
 		if (vg[get_vendor_group(p)].disable_util_est) {
-			p->se.avg.util_est.enqueued = 0;
-			p->se.avg.util_est.ewma = 0;
+			WRITE_ONCE(p->se.avg.util_est, 0);
 			return;
 		}
 
@@ -2417,77 +2288,59 @@ void rvh_util_est_update_pixel_mod(void *data, struct cfs_rq *cfs_rq, struct tas
 	if (!task_sleep)
 		return;
 
+	/* Get current estimate of utilization */
+	ewma = READ_ONCE(p->se.avg.util_est);
+
 	/*
-	 * If the PELT values haven't changed since enqueue time,
-	 * skip the util_est update.
+	 * If the PELT values haven't changed since enqueue time, skip the
+	 * util_est update. With auto DVFS headroom, update anyway.
 	 */
-	ue = p->se.avg.util_est;
 	if (!static_branch_likely(&auto_dvfs_headroom_enable)) {
-		if (ue.enqueued & UTIL_AVG_UNCHANGED)
+		if (ewma & UTIL_AVG_UNCHANGED)
 			return;
 	} else {
-		ue.enqueued = ue.enqueued & ~UTIL_AVG_UNCHANGED;
+		ewma &= ~UTIL_AVG_UNCHANGED;
 	}
 
-	last_enqueued_diff = ue.enqueued;
+	/* Get utilization at dequeue */
+	dequeued = task_util(p);
 
 	/*
 	 * Reset EWMA on utilization increases, the moving average is used only
 	 * to smooth utilization decreases.
 	 */
-	ue.enqueued = task_util(p);
-	if (sched_feat(UTIL_EST_FASTUP)) {
-		if (ue.ewma < ue.enqueued) {
-			ue.ewma = ue.enqueued;
-			goto done;
-		}
+	if (ewma <= dequeued) {
+		ewma = dequeued;
+		goto done;
 	}
 
 	/*
 	 * Skip update of task's estimated utilization when its members are
 	 * already ~1% close to its last activation value.
 	 */
-	last_ewma_diff = ue.enqueued - ue.ewma;
-	last_enqueued_diff -= ue.enqueued;
-	if (within_margin(last_ewma_diff, UTIL_EST_MARGIN)) {
-		if (!within_margin(last_enqueued_diff, UTIL_EST_MARGIN))
-			goto done;
-
-		return;
-	}
+	last_ewma_diff = ewma - dequeued;
+	if (last_ewma_diff < UTIL_EST_MARGIN)
+		goto done;
 
 	/*
-	 * To avoid overestimation of actual task utilization, skip updates if
-	 * we cannot grant there is idle time in this CPU.
+	 * To avoid underestimate of task utilization, skip updates of EWMA if
+	 * we cannot grant that thread got all CPU time it wanted.
 	 */
 	if (!static_branch_likely(&auto_dvfs_headroom_enable)) {
-		if (task_util(p) > capacity_orig_of(cpu_of(rq_of(cfs_rq))))
-			return;
+		if ((dequeued + UTIL_EST_MARGIN) < task_runnable(p))
+			goto done;
 	}
 
 	/*
-	 * Update Task's estimated utilization
-	 *
-	 * When *p completes an activation we can consolidate another sample
-	 * of the task size. This is done by storing the current PELT value
-	 * as ue.enqueued and by using this value to update the Exponential
-	 * Weighted Moving Average (EWMA):
-	 *
-	 *  ewma(t) = w *  task_util(p) + (1-w) * ewma(t-1)
-	 *          = w *  task_util(p) +         ewma(t-1)  - w * ewma(t-1)
-	 *          = w * (task_util(p) -         ewma(t-1)) +     ewma(t-1)
-	 *          = w * (      last_ewma_diff            ) +     ewma(t-1)
-	 *          = w * (last_ewma_diff  +  ewma(t-1) / w)
-	 *
-	 * Where 'w' is the weight of new samples, which is configured to be
-	 * 0.25, thus making w=1/4 ( >>= UTIL_EST_WEIGHT_SHIFT)
+	 * Update the EWMA with weight w = 1/4 (UTIL_EST_WEIGHT_SHIFT):
+	 *  ewma(t) = w * (-last_ewma_diff + ewma(t-1) / w)
 	 */
-	ue.ewma <<= UTIL_EST_WEIGHT_SHIFT;
-	ue.ewma  += last_ewma_diff;
-	ue.ewma >>= UTIL_EST_WEIGHT_SHIFT;
+	ewma <<= UTIL_EST_WEIGHT_SHIFT;
+	ewma  -= last_ewma_diff;
+	ewma >>= UTIL_EST_WEIGHT_SHIFT;
 done:
-	ue.enqueued |= UTIL_AVG_UNCHANGED;
-	WRITE_ONCE(p->se.avg.util_est, ue);
+	ewma |= UTIL_AVG_UNCHANGED;
+	WRITE_ONCE(p->se.avg.util_est, ewma);
 
 	trace_sched_util_est_se_tp(&p->se);
 }
@@ -2548,13 +2401,12 @@ void rvh_post_init_entity_util_avg_pixel_mod(void *data, struct sched_entity *se
 
 		sa->util_avg = init_value >> 1;
 		sa->runnable_avg = init_value >> 1;
-		sa->util_est.enqueued = init_value | UTIL_AVG_UNCHANGED;
-		sa->util_est.ewma = init_value;
+		sa->util_est = init_value | UTIL_AVG_UNCHANGED;
 	}
 }
 
 void vh_sched_uclamp_validate_pixel_mod(void *data, struct task_struct *tsk,
-					const struct sched_attr *attr, bool user,
+					const struct sched_attr *attr,
 					int *ret, bool *done)
 {
 	struct vendor_task_struct *vtsk = get_vendor_task_struct(tsk);
@@ -2689,7 +2541,8 @@ out:
 	set_prefer_high_cap(p, false);
 }
 
-void rvh_set_user_nice_locked_pixel_mod(void *data, struct task_struct *p, long *nice)
+void rvh_set_user_nice_locked_pixel_mod(void *data, struct task_struct *p, long *nice,
+					bool *allowed)
 {
 	struct vendor_task_struct *vp;
 	unsigned long irqflags;

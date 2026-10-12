@@ -86,7 +86,7 @@ static bool is_sched_lib_based_app(pid_t pid)
 	mutex_lock(&__sched_lib_name_mutex);
 	if (strnlen(sched_lib_name, LIB_PATH_LENGTH) == 0)
 		goto put_task_struct;
-	strlcpy(tmp_lib_name, sched_lib_name, LIB_PATH_LENGTH);
+	strscpy(tmp_lib_name, sched_lib_name, LIB_PATH_LENGTH);
 	mutex_unlock(&__sched_lib_name_mutex);
 
 	mm = get_task_mm(p);
@@ -166,14 +166,14 @@ static inline void boost_priority_task(struct task_struct *p)
 	rq_unlock_irqrestore(rq, &rf);
 }
 
-void vh_set_task_comm_pixel_mod(void *data, struct task_struct *p)
+void vh_set_task_comm_pixel_mod(void *data, struct task_struct *p, bool exec)
 {
 	char tmp[LIB_PATH_LENGTH];
 	char *tok, *str;
 	unsigned long flags;
 
 	spin_lock_irqsave(&priority_task_name_lock, flags);
-	strlcpy(tmp, priority_task_name, LIB_PATH_LENGTH);
+	strscpy(tmp, priority_task_name, LIB_PATH_LENGTH);
 	spin_unlock_irqrestore(&priority_task_name_lock, flags);
 	str = tmp;
 
@@ -200,7 +200,7 @@ int set_prefer_idle_task_name(void)
 	int ret = -1;
 
 	spin_lock(&prefer_idle_task_name_lock);
-	strlcpy(tmp, prefer_idle_task_name, LIB_PATH_LENGTH);
+	strscpy(tmp, prefer_idle_task_name, LIB_PATH_LENGTH);
 	spin_unlock(&prefer_idle_task_name_lock);
 
 	if (*tmp != '\0') {

@@ -3252,7 +3252,7 @@ ssize_t priority_task_name_store(struct file *filp, const char __user *ubuf, siz
 	tmp[count] = '\0';
 
 	spin_lock_irqsave(&priority_task_name_lock, irqflags);
-	strlcpy(priority_task_name, tmp, sizeof(priority_task_name));
+	strscpy(priority_task_name, tmp, sizeof(priority_task_name));
 	spin_unlock_irqrestore(&priority_task_name_lock, irqflags);
 	return count;
 }
@@ -3314,7 +3314,7 @@ ssize_t prefer_idle_task_name_store(struct file *filp, const char __user *ubuf, 
 	tmp[count] = '\0';
 
 	spin_lock(&prefer_idle_task_name_lock);
-	strlcpy(prefer_idle_task_name, tmp, sizeof(prefer_idle_task_name));
+	strscpy(prefer_idle_task_name, tmp, sizeof(prefer_idle_task_name));
 	spin_unlock(&prefer_idle_task_name_lock);
 
 	if (set_prefer_idle_task_name())
@@ -3362,7 +3362,7 @@ static ssize_t is_tgid_system_ui_store(struct file *filp,
 		return -EACCES;
 	}
 
-	strlcpy(tgid_comm, p->comm, TASK_COMM_LEN);
+	strscpy(tgid_comm, p->comm, TASK_COMM_LEN);
 	put_task_struct(p);
 	rcu_read_unlock();
 
@@ -3419,7 +3419,7 @@ static ssize_t check_tgid_type_store(struct file *filp,
 		return -EACCES;
 	}
 
-	strlcpy(tgid_comm, p->comm, TASK_COMM_LEN);
+	strscpy(tgid_comm, p->comm, TASK_COMM_LEN);
 	put_task_struct(p);
 	rcu_read_unlock();
 
@@ -3460,7 +3460,7 @@ ssize_t boost_at_fork_task_name_store(struct file *filp, const char __user *ubuf
 	tmp[count] = '\0';
 
 	raw_spin_lock_irqsave(&boost_at_fork_task_name_lock, irqflags);
-	strlcpy(boost_at_fork_task_name, tmp, sizeof(boost_at_fork_task_name));
+	strscpy(boost_at_fork_task_name, tmp, sizeof(boost_at_fork_task_name));
 	raw_spin_unlock_irqrestore(&boost_at_fork_task_name_lock, irqflags);
 	return count;
 }

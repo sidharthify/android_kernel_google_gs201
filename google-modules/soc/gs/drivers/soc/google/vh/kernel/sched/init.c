@@ -50,9 +50,9 @@ extern void rvh_cpu_cgroup_online_pixel_mod(void *data, struct cgroup_subsys_sta
 extern void rvh_post_init_entity_util_avg_pixel_mod(void *data, struct sched_entity *se);
 extern void rvh_check_preempt_wakeup_pixel_mod(void *data, struct rq *rq, struct task_struct *p,
 			bool *preempt, bool *nopreempt, int wake_flags, struct sched_entity *se,
-			struct sched_entity *pse, int next_buddy_marked, unsigned int granularity);
+			struct sched_entity *pse);
 extern void vh_sched_uclamp_validate_pixel_mod(void *data, struct task_struct *tsk,
-					       const struct sched_attr *attr, bool user,
+					       const struct sched_attr *attr,
 					       int *ret, bool *done);
 extern void vh_sched_setscheduler_uclamp_pixel_mod(void *data, struct task_struct *tsk,
 						   int clamp_id, unsigned int value);
@@ -107,10 +107,11 @@ extern void rvh_remove_entity_load_avg_pixel_mod(void *data, struct cfs_rq *cfs_
 extern void rvh_update_blocked_fair_pixel_mod(void *data, struct rq *rq);
 #endif
 extern void android_vh_use_amu_fie_pixel_mod(void* data, bool *use_amu_fie);
-extern void rvh_set_user_nice_locked_pixel_mod(void *data, struct task_struct *p, long *nice);
+extern void rvh_set_user_nice_locked_pixel_mod(void *data, struct task_struct *p, long *nice,
+					       bool *allowed);
 extern void rvh_setscheduler_prio_pixel_mod(void *data, struct task_struct *p);
 extern void rvh_find_lowest_rq_pixel_mod(void *data, struct task_struct *p,
-					 struct cpumask *lowest_mask,
+					 struct task_struct *exec_ctx, struct cpumask *lowest_mask,
 					 int ret, int *cpu);
 extern void rvh_util_fits_cpu_pixel_mod(void *data, unsigned long util, unsigned long uclamp_min,
 	unsigned long uclamp_max, int cpu, bool *fits, bool *done);
@@ -120,7 +121,7 @@ extern int pmu_poll_init(void);
 extern void set_cluster_enabled_cb(int cluster, int enabled);
 extern void register_set_cluster_enabled_cb(void (*func)(int, int));
 extern void vh_sched_resume_end(void *data, void *unused);
-extern void vh_set_task_comm_pixel_mod(void *data, struct task_struct *p);
+extern void vh_set_task_comm_pixel_mod(void *data, struct task_struct *p, bool exec);
 
 extern struct cpufreq_governor sched_pixel_gov;
 extern bool wait_for_init;
@@ -298,6 +299,10 @@ out_no_pixel_cluster_start_cpu:
 
 	return -ENOMEM;
 }
+
+unsigned int vh_sysctl_sched_latency = 24000000U;		/* 6.1 default for 8 CPUs */
+unsigned int vh_sysctl_sched_wakeup_granularity = 4000000U;	/* 6.1 default for 8 CPUs */
+unsigned long vh_teo_util_threshold[CONFIG_VH_SCHED_MAX_CPU_NR];
 
 static void init_sched_params(void)
 {
@@ -498,7 +503,7 @@ static int vh_sched_init(void)
 	if (ret)
 		return ret;
 
-	ret = register_trace_android_rvh_check_preempt_wakeup(
+	ret = register_trace_android_rvh_check_preempt_wakeup_fair(
 		rvh_check_preempt_wakeup_pixel_mod, NULL);
 	if (ret)
 		return ret;
@@ -599,7 +604,7 @@ static int vh_sched_init(void)
 	if (ret)
 		return ret;
 
-	ret = register_trace_android_vh_set_task_comm(vh_set_task_comm_pixel_mod, NULL);
+	ret = register_trace_android_rvh_set_task_comm(vh_set_task_comm_pixel_mod, NULL);
 	if (ret)
 		return ret;
 

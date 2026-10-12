@@ -80,4 +80,13 @@ extern struct pixel_idle_em *vendor_sched_pixel_idle_em;
 
 #endif /* CONFIG_PIXEL_EM */
 
+#include <linux/energy_model.h>
+#include <linux/rcupdate.h>
+
+/* the EM perf state table lives behind pd->em_table since 6.9 */
+static inline struct em_perf_state *pixel_em_table(struct em_perf_domain *pd)
+{
+	return rcu_dereference_raw(pd->em_table)->state;
+}
+
 #endif /* __PIXEL_EM_H__ */
