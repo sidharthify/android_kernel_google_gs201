@@ -231,6 +231,13 @@ config EXYNOS_CONTENT_PATH_PROTECTION
 
 source "$(KCONFIG_EXT_PREFIX)drivers/soc/google/gsa/Kconfig"
 
+config GOOGLE_MODEMCTL
+	tristate "Common modem control interfaces"
+	default n
+	help
+	  This module provides common helpers and control interfaces for modems
+	  and clients that may want to interact with them.
+
 source "$(KCONFIG_EXT_PREFIX)drivers/soc/google/cpif/Kconfig"
 
 source "$(KCONFIG_EXT_PREFIX)drivers/soc/google/debug/Kconfig"

@@ -39,6 +39,7 @@ obj-$(CONFIG_EXYNOS_BCM_DBG_DUMP)	+= exynos-bcm_dbg-dump.o
 
 # CPIF
 obj-$(CONFIG_EXYNOS_MODEM_IF) += cpif/
+obj-$(CONFIG_GOOGLE_MODEMCTL)	+= modemctl/
 
 obj-y				    	+= debug/
 
