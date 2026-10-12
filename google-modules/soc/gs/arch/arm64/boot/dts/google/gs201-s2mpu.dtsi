@@ -253,6 +253,14 @@
 		reg = <0x0 0x1cc60000 0x10000>;
 		interrupts = <GIC_SPI IRQ_SYSMMU_S2_TPU_TPU IRQ_TYPE_LEVEL_HIGH>;
 		power-domains = <&pd_tpu>;
+		/*
+		 * Only the pKVM S2MPU driver binds this node, and there is none
+		 * on this kernel. Left enabled, it is a pd-tpu consumer that never
+		 * probes, so pd-tpu never reaches sync_state and stays powered,
+		 * and the TPU refuses to boot until its block reports powered off.
+		 * janeiro maps it through the TPU node's s2mpu phandle instead.
+		 */
+		status = "disabled";
 	};
 
 	s2mpu_aoc: s2mpu_aoc@1a0b0000 {

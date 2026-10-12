@@ -33,6 +33,7 @@
 		memory-region = <&tpu_fw_reserved>, <&tpu_fw_ctx_reserved>;
 		edgetpu,shareability = <0x1cc20000>;
 		gsa-device = <&gsa>;
+		s2mpu = <&s2mpu_tpu>;
 		tpu_dvfs_table_size = <7 2>; /*<row col>*/
 		/*
 		 * DVFS values calculated from average power with real-world workloads
