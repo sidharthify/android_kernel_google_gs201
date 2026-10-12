@@ -8316,6 +8316,7 @@ unsigned long cpu_util_cfs(int cpu)
 {
 	return cpu_util(cpu, NULL, -1, 0);
 }
+EXPORT_SYMBOL_GPL(cpu_util_cfs);
 
 unsigned long cpu_util_cfs_boost(int cpu)
 {
