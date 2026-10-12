@@ -31,20 +31,33 @@ MODULE_DEVICE_TABLE(of, edgetpu_of_match);
 /*
  * Set shareability for enabling IO coherency in Janeiro
  */
-static int janeiro_mmu_set_shareability(struct device *dev, u32 reg_base)
+static int janeiro_mmu_set_shareability(struct janeiro_platform_dev *jpdev, u32 reg_base)
 {
-	void __iomem *addr = ioremap(reg_base, PAGE_SIZE);
+	struct device *dev = jpdev->mobile_dev.edgetpu_dev.dev;
+	void __iomem *addr = devm_ioremap(dev, reg_base, PAGE_SIZE);
 
 	if (!addr) {
 		dev_err(dev, "sysreg ioremap failed\n");
 		return -ENOMEM;
 	}
 
-	writel_relaxed(SHAREABLE_WRITE | SHAREABLE_READ | INNER_SHAREABLE,
-		       addr + EDGETPU_SYSREG_TPU_SHAREABILITY);
-	iounmap(addr);
+	jpdev->shareability = addr + EDGETPU_SYSREG_TPU_SHAREABILITY;
+	writel_relaxed(SHAREABLE_WRITE | SHAREABLE_READ | INNER_SHAREABLE, jpdev->shareability);
 
 	return 0;
+}
+
+/*
+ * The shareability register lives in the TPU block and resets whenever pd-tpu
+ * powers off, so set it again on every power-up.
+ */
+void janeiro_restore_shareability(struct edgetpu_dev *etdev)
+{
+	struct janeiro_platform_dev *jpdev = to_janeiro_dev(etdev);
+
+	if (jpdev->shareability)
+		writel_relaxed(SHAREABLE_WRITE | SHAREABLE_READ | INNER_SHAREABLE,
+			       jpdev->shareability);
 }
 
 static int janeiro_parse_set_dt_property(struct edgetpu_mobile_platform_dev *etmdev)
@@ -67,7 +80,7 @@ static int janeiro_parse_set_dt_property(struct edgetpu_mobile_platform_dev *etm
 	ret = of_property_read_u32_index(dev->of_node, "edgetpu,shareability", 0, &reg);
 	if (ret)
 		goto err;
-	ret = janeiro_mmu_set_shareability(dev, reg);
+	ret = janeiro_mmu_set_shareability(to_janeiro_dev(etdev), reg);
 err:
 	if (ret)
 		etdev_warn(etdev, "failed to enable shareability: %d", ret);

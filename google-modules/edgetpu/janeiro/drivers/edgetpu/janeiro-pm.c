@@ -11,6 +11,7 @@
 #include "edgetpu-config.h"
 #include "edgetpu-internal.h"
 #include "edgetpu-mobile-platform.h"
+#include "janeiro-platform.h"
 #include "mobile-pm.h"
 
 #define TPU_DEFAULT_POWER_STATE		TPU_ACTIVE_UUD
@@ -88,6 +89,8 @@ static int janeiro_lpm_up(struct edgetpu_dev *etdev)
 
 	edgetpu_dev_write_32_sync(etdev, EDGETPU_PSM0_CFG, 0);
 	edgetpu_dev_write_32_sync(etdev, EDGETPU_PSM1_CFG, 0);
+
+	janeiro_restore_shareability(etdev);
 
 	return 0;
 }
