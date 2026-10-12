@@ -6,6 +6,8 @@
 
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <net/netdev_rx_queue.h>
+#include <net/rps.h>
 #include "modem_prj.h"
 #include "modem_utils.h"
 #include "modem_ctrl.h"
