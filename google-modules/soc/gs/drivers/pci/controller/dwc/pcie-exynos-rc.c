@@ -3488,6 +3488,19 @@ int exynos_pcie_rc_poweron(int ch_num)
 				}
 			}
 
+			/*
+			 * Save the root port now that the EP is enumerated and the
+			 * bridge windows cover its BARs. Every later power-on restores
+			 * this; the copy taken at probe has no windows.
+			 */
+			if (pci_save_state(exynos_pcie->pci_dev)) {
+				dev_err(dev, "Failed to save pcie state\n");
+				goto poweron_fail;
+			}
+			kfree(exynos_pcie->pci_saved_configs);
+			exynos_pcie->pci_saved_configs =
+				pci_store_saved_state(exynos_pcie->pci_dev);
+
 			exynos_pcie->ep_pci_dev = exynos_pcie_get_pci_dev(&pci->pp);
 
 #if IS_ENABLED(CONFIG_GS_S2MPU) || IS_ENABLED(CONFIG_EXYNOS_PCIE_IOMMU)
