@@ -9,7 +9,7 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/modem_notifier.h>
+#include <soc/google/modem_notifier.h>
 
 #include "aoc_alsa.h"
 #include "aoc_alsa_drv.h"
