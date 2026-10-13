@@ -195,6 +195,10 @@ u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 
 void set_next_buddy(struct sched_entity *se)
 {
+	/* a delayed entity is asleep; EEVDF never picks it as ->next */
+	if (se->sched_delayed)
+		return;
+
 	for_each_sched_entity(se) {
 		if (SCHED_WARN_ON(!se->on_rq))
 			return;
