@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 
 ccflags-y += -I$(src)/include
+ccflags-y += -I$(srctree)/google-modules/soc/gs/include
 
 obj-$(CONFIG_BIGWAVE) += bigwave.o
 bigwave-y += bigo.o bigo_pm.o bigo_io.o bigo_of.o bigo_iommu.o bigo_prioq.o
