@@ -3189,7 +3189,7 @@ retry:
 	/* set #PERST logical 0 */
 	gpiod_set_value(exynos_pcie->perst_gpio, 0);
 
-	dev_info(dev, "%s: Set PERST to logical 0, gpio(%d) val=(%d)\n",
+	dev_dbg(dev, "%s: Set PERST to logical 0, gpio(%d) val=(%d)\n",
 		__func__, desc_to_gpio(exynos_pcie->perst_gpio),
 		gpiod_get_value(exynos_pcie->perst_gpio));
 	if (exynos_pcie->ep_device_type == EP_BCM_WIFI) {
@@ -3231,7 +3231,7 @@ retry:
 	if (exynos_pcie->use_cache_coherency)
 		exynos_pcie_rc_set_iocc(pp, 1);
 
-	logbuffer_logk(exynos_pcie->log, LOGLEVEL_INFO, "D state: %x, LTSSM: %x (XO always on)",
+	logbuffer_log(exynos_pcie->log, "D state: %x, LTSSM: %x (XO always on)",
 		exynos_elbi_read(exynos_pcie, PCIE_PM_DSTATE) & PCIE_PM_DSTATE_MASK,
 		exynos_elbi_read(exynos_pcie, PCIE_ELBI_RDLH_LINKUP) & PCIE_ELBI_LTSSM_STATE_MASK);
 
@@ -3294,7 +3294,7 @@ retry:
 	} else {
 		val = exynos_elbi_read(exynos_pcie, PCIE_ELBI_RDLH_LINKUP)
 		      & PCIE_ELBI_LTSSM_STATE_MASK;
-		logbuffer_logk(exynos_pcie->log, LOGLEVEL_INFO, "%s(0x%x)", LINK_STATE_DISP(val),
+		logbuffer_log(exynos_pcie->log, "%s(0x%x)", LINK_STATE_DISP(val),
 			       val);
 		link_stats_log_link_up(exynos_pcie, count);
 
@@ -3678,7 +3678,7 @@ void exynos_pcie_pm_suspend(int ch_num)
 
 	logbuffer_log(exynos_pcie->log, "pm_suspend api called");
 	if (exynos_pcie->state == STATE_LINK_DOWN) {
-		logbuffer_logk(exynos_pcie->log, LOGLEVEL_INFO, "RC%d already off",
+		logbuffer_log(exynos_pcie->log, "RC%d already off",
 			       exynos_pcie->ch_num);
 
 		return;
