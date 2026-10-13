@@ -17,9 +17,14 @@
  * pass-through after every power-up of its domain. This gives up the S2MPUs'
  * DMA isolation, which a kernel without pKVM can't offer anyway.
  *
- * S2MPUs outside a power domain keep what the bootloader or their master's
- * driver sets up (GSA, HSI0), so they are bound and left alone. Their
- * registers aren't requested here either, as those drivers map them too.
+ * The always-on S2MPUs (CPUCL0, G3D, HSI1, HSI2, MISC) have no domain to
+ * follow, but they still lose their state when the SoC enters deep sleep on
+ * battery and come back blocking, which hangs UFS and the GPU. pKVM restores
+ * them on resume; do the same.
+ *
+ * Other S2MPUs outside a power domain keep what the bootloader or their
+ * master's driver sets up (GSA, HSI0), so they are bound and left alone.
+ * Registers aren't requested here, as those drivers map them too.
  */
 
 #include <linux/io.h>
@@ -77,7 +82,9 @@ static int s2mpu_passthrough_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	if (!dev->pm_domain || of_property_read_bool(dev->of_node, "deny-all"))
+	if (of_property_read_bool(dev->of_node, "deny-all"))
+		return 0;
+	if (!dev->pm_domain && !of_property_read_bool(dev->of_node, "always-on"))
 		return 0;
 
 	s = devm_kzalloc(dev, sizeof(*s), GFP_KERNEL);
@@ -93,6 +100,8 @@ static int s2mpu_passthrough_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, s);
 	s->powered = true;	/* until the put below powers it off */
+	if (!dev->pm_domain)
+		return 0;	/* always-on: only restored on resume */
 	s->nb.notifier_call = s2mpu_passthrough_genpd_event;
 	ret = dev_pm_genpd_add_notifier(dev, &s->nb);
 	if (ret)
