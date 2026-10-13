@@ -13,10 +13,10 @@
 		status = "ok";
 		reg = <0x0 0x1CB00000 0x550
 			0x0 0x1CA94000 0xa00>;
-		reg-names = "bo", "ssmt_bo_pid";
+		reg-names = "regs", "ssmt_pid";
 		interrupts = <GIC_SPI IRQ_BO_XINT_BO IRQ_TYPE_LEVEL_HIGH>;
-		bigo-opp-table = <&bigo_opp_table>;
-		bigo-bw-table = <&bigo_bw_table>;
+		vpu-opp-table = <&bigo_opp_table>;
+		vpu-bw-table = <&bigo_bw_table>;
 		iommus = <&sysmmu_bo>;
 		samsung,iommu-group = <&iommu_group_bo>;
 		pt_id = "bigocean";
