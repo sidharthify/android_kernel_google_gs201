@@ -286,6 +286,7 @@ static int usb_audio_offload_init(struct xhci_hcd *xhci)
 	if (ret) {
 		dev_err(dev, "Could not get reserved memory\n");
 		kfree(offload_data);
+		offload_data = NULL;
 		return ret;
 	}
 
@@ -329,6 +330,7 @@ release_rmem:
 
 free_data:
 	kfree(offload_data);
+	offload_data = NULL;
 
 	return ret;
 #endif
@@ -353,6 +355,10 @@ static void usb_audio_offload_cleanup(struct xhci_hcd *xhci)
 	struct device_node	*np;
 	int i, count, ret;
 #endif
+
+	/* offload_init() failed and already cleaned up */
+	if (!offload_data)
+		return;
 
 	offload_data->usb_audio_offload = false;
 	offload_data->offload_state = false;
