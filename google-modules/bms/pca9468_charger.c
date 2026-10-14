@@ -4313,6 +4313,18 @@ static int pca9468_set_charging_enabled(struct pca9468_charger *pca9468, int ind
 		pca9468->timer_period = 0;
 		mod_delayed_work(pca9468->dc_wq, &pca9468->timer_work,
 				 msecs_to_jiffies(pca9468->timer_period));
+	} else if (pca9468->charging_state == DC_STATE_NO_CHARGING &&
+		   (pca9468->fv_uv < 0 || pca9468->cc_max < 0)) {
+		/*
+		 * Stopping clears fv_uv and cc_max, and the ping from gcpm
+		 * doesn't set them again. Starting now would only time out
+		 * in pca9468_check_vbatmin() and repeat on every ping, so
+		 * fail instead and let gcpm restart DC with a preset.
+		 */
+		logbuffer_prlog(pca9468, LOGLEVEL_INFO,
+				"%s: not configured fv_uv=%d cc_max=%d",
+				__func__, pca9468->fv_uv, pca9468->cc_max);
+		ret = -EINVAL;
 	} else if (pca9468->charging_state == DC_STATE_NO_CHARGING) {
 		logbuffer_prlog(pca9468, LOGLEVEL_DEBUG,
 				"%s: start pps_idx=%d->%d charging_state=%d timer_id=%d",
