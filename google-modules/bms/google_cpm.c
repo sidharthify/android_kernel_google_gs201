@@ -1728,6 +1728,13 @@ static void gcpm_pps_wlc_dc_work(struct work_struct *work)
 		} else {
 			pr_err("PPS_Work: ping DC failed, elap=%lld (%d)\n", elap, ret);
 			ret = gcpm_chg_offline(gcpm, gcpm->dc_index);
+			/*
+			 * Drop the DC vote on the charger mode as well, or the
+			 * main charger stays parked for DC and doesn't charge.
+			 * gcpm_dc_start() votes again when DC restarts.
+			 */
+			if (ret == 0)
+				ret = gcpm_dc_enable(gcpm, false);
 			if (ret == 0)
 				ret = gcpm_enable_default(gcpm);
 			if (ret < 0) {
