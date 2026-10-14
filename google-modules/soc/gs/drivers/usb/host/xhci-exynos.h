@@ -53,6 +53,17 @@ struct xhci_exynos_priv {
 	struct xhci_hcd_exynos *xhci_exynos;
 };
 
+/**
+ * @offload_init: called for offload init process
+ * @offload_cleanup: called for offload cleanup process
+ * @offload_setup: called for offload setup process
+ */
+struct xhci_exynos_ops {
+	int (*offload_init)(struct xhci_hcd *xhci);
+	void (*offload_cleanup)(struct xhci_hcd *xhci);
+	int (*offload_setup)(struct xhci_hcd *xhci);
+};
+
 #define hcd_to_xhci_exynos_priv(h) ((struct xhci_exynos_priv *)hcd_to_xhci(h)->priv)
 #define xhci_to_exynos_priv(x) ((struct xhci_exynos_priv *)(x)->priv)
 
@@ -62,5 +73,6 @@ extern int exynos_usbdrd_phy_vendor_set(struct phy *phy, int is_enable,
 extern int dwc3_otg_get_idle_ip_index(void);
 void xhci_exynos_register_notify(void);
 void xhci_exynos_unregister_notify(void);
+int xhci_exynos_register_offload_ops(struct xhci_exynos_ops *offload_ops);
 
 #endif	/* _XHCI_EXYNOS_H */

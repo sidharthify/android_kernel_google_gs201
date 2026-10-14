@@ -424,6 +424,61 @@ static void xhci_exynos_pm_runtime_init(struct device *dev)
 	init_waitqueue_head(&dev->power.wait_queue);
 }
 
+static struct xhci_exynos_ops *xhci_vendor_ops;
+
+int xhci_exynos_register_offload_ops(struct xhci_exynos_ops *offload_ops)
+{
+	if (offload_ops == NULL)
+		return -EINVAL;
+
+	xhci_vendor_ops = offload_ops;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(xhci_exynos_register_offload_ops);
+
+/*
+ * The offload hooks come from aoc_usb_driver, which moves the xHCI rings into
+ * memory the AoC can reach so it can stream USB audio itself. Without them the
+ * controller still works for everything else, so a missing or failing hook only
+ * costs the audio offload and doesn't fail the probe.
+ */
+static void xhci_vendor_offload_init(struct device *dev, struct xhci_hcd *xhci)
+{
+	struct xhci_exynos_ops *ops = xhci_vendor_ops;
+	int ret;
+
+	if (!ops || !ops->offload_init) {
+		dev_warn(dev, "No offload init hook, USB audio offload disabled\n");
+		return;
+	}
+
+	ret = ops->offload_init(xhci);
+	if (ret)
+		dev_err(dev, "Offload init failed: %d\n", ret);
+}
+
+static void xhci_vendor_offload_cleanup(struct device *dev, struct xhci_hcd *xhci)
+{
+	struct xhci_exynos_ops *ops = xhci_vendor_ops;
+
+	if (ops && ops->offload_cleanup)
+		ops->offload_cleanup(xhci);
+}
+
+static void xhci_vendor_offload_setup(struct device *dev, struct xhci_hcd *xhci)
+{
+	struct xhci_exynos_ops *ops = xhci_vendor_ops;
+	int ret;
+
+	if (!ops || !ops->offload_setup)
+		return;
+
+	ret = ops->offload_setup(xhci);
+	if (ret)
+		dev_err(dev, "Offload setup failed: %d\n", ret);
+}
+
 static int xhci_exynos_probe(struct platform_device *pdev)
 {
 	struct device		*parent = pdev->dev.parent;
@@ -605,6 +660,8 @@ static int xhci_exynos_probe(struct platform_device *pdev)
 		}
 	}
 
+	xhci_vendor_offload_init(&pdev->dev, xhci);
+
 	xhci_exynos->main_wakelock = main_wakelock;
 	xhci_exynos->shared_wakelock = shared_wakelock;
 
@@ -620,6 +677,8 @@ static int xhci_exynos_probe(struct platform_device *pdev)
 	ret = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
 	if (ret)
 		goto dealloc_usb2_hcd;
+
+	xhci_vendor_offload_setup(&pdev->dev, xhci);
 
 	device_enable_async_suspend(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
@@ -640,6 +699,7 @@ dealloc_usb2_hcd:
 	usb_remove_hcd(hcd);
 
 disable_usb_phy:
+	xhci_vendor_offload_cleanup(&pdev->dev, xhci);
 	usb_phy_shutdown(hcd->usb_phy);
 
 put_usb3_hcd:
@@ -697,6 +757,8 @@ remove_hcd:
 	xhci->shared_hcd = NULL;
 	usb_phy_shutdown(hcd->usb_phy);
 	usb_remove_hcd(hcd);
+
+	xhci_vendor_offload_cleanup(&dev->dev, xhci);
 
 	devm_iounmap(&dev->dev, hcd->regs);
 	usb_put_hcd(shared_hcd);
