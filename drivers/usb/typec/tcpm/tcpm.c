@@ -7521,6 +7521,29 @@ void tcpm_tcpc_reset(struct tcpm_port *port)
 }
 EXPORT_SYMBOL_GPL(tcpm_tcpc_reset);
 
+/**
+ * tcpm_get_partner_source_caps - copy the partner's last Source_Capabilities
+ * @port: tcpm port
+ * @pdo: buffer for the PDOs
+ * @max: size of @pdo in PDOs
+ *
+ * Returns the number of PDOs copied, 0 if no partner is attached.
+ */
+int tcpm_get_partner_source_caps(struct tcpm_port *port, u32 *pdo, unsigned int max)
+{
+	unsigned int cnt = 0;
+
+	mutex_lock(&port->lock);
+	if (port->attached) {
+		cnt = min(port->nr_source_caps, max);
+		memcpy(pdo, port->source_caps, cnt * sizeof(*pdo));
+	}
+	mutex_unlock(&port->lock);
+
+	return cnt;
+}
+EXPORT_SYMBOL_GPL(tcpm_get_partner_source_caps);
+
 static void tcpm_port_unregister_pd(struct tcpm_port *port)
 {
 	int i;
