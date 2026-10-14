@@ -2169,6 +2169,17 @@ int tcpm_get_partner_src_caps(struct tcpm_port *port, u32 **src_pdo)
 	if (!src_pdo)
 		return -ENOMEM;
 
+#ifndef CONFIG_TCPCI_VENDOR_HOOKS
+	/* Nothing fills partner_src_caps without the vendor hooks, ask TCPM */
+	ret = tcpm_get_partner_source_caps(port, *src_pdo, PDO_MAX_OBJECTS);
+	if (ret > 0)
+		return ret;
+
+	kfree(*src_pdo);
+	*src_pdo = NULL;
+	return -ENODATA;
+#endif
+
 	spin_lock(&g_caps_lock);
 
 	if (!nr_partner_src_caps) {
