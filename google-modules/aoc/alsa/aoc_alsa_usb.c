@@ -10,8 +10,8 @@
  */
 
 #include <sound/core.h>
+#include <sound/pcm.h>
 #include <linux/usb.h>
-#include <trace/hooks/audio_usboffload.h>
 
 #include "aoc_alsa.h"
 #include "card.h"
@@ -79,6 +79,7 @@ void usb_audio_offload_connect(struct snd_usb_audio *chip)
 	chip->quirk_flags |= QUIRK_FLAG_SKIP_IMPLICIT_FB;
 	mutex_unlock(&chip->mutex);
 }
+EXPORT_SYMBOL_GPL(usb_audio_offload_connect);
 
 void usb_audio_offload_disconnect(struct snd_usb_audio *chip)
 {
@@ -97,6 +98,7 @@ void usb_audio_offload_disconnect(struct snd_usb_audio *chip)
 	uadev[card_num].card_num = 0;
 	mutex_unlock(&chip->mutex);
 }
+EXPORT_SYMBOL_GPL(usb_audio_offload_disconnect);
 
 void usb_audio_offload_suspend(struct usb_interface *intf, pm_message_t message)
 {
@@ -195,27 +197,14 @@ void aoc_alsa_usb_callback_unregister(void)
 }
 EXPORT_SYMBOL_GPL(aoc_alsa_usb_callback_unregister);
 
-static void audio_usb_offload_connect(void *unused, struct usb_interface *intf,
-			struct snd_usb_audio *chip)
-{
-	usb_audio_offload_connect(chip);
-}
-
-static void audio_usb_offload_disconnect(void *unused, struct usb_interface *intf)
-{
-	struct snd_usb_audio *chip = usb_get_intfdata(intf);
-
-	usb_audio_offload_disconnect(chip);
-}
-
+/*
+ * snd-usb-audio takes a single set of platform ops, and aoc_usb_driver
+ * registers them, so it calls usb_audio_offload_connect() and
+ * usb_audio_offload_disconnect() from there.
+ */
 int aoc_usb_init(void)
 {
-	int ret = 0;
-
-	register_trace_android_vh_audio_usb_offload_connect(audio_usb_offload_connect, NULL);
-	register_trace_android_rvh_audio_usb_offload_disconnect(audio_usb_offload_disconnect, NULL);
-
-	return ret;
+	return 0;
 }
 
 void aoc_usb_exit(void)

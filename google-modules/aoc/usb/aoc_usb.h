@@ -77,9 +77,12 @@ int xhci_set_isoc_tr_info(u16 ep_id, u16 dir, struct xhci_ring *ep_ring);
 int xhci_get_usb_audio_count(void);
 
 int xhci_offload_helper_init(void);
+void xhci_offload_helper_exit(void);
 int usb_vendor_helper_init(void);
 
-extern int dwc3_otg_host_ready(bool ready);
+struct snd_usb_audio;
+void usb_audio_offload_connect(struct snd_usb_audio *chip);
+void usb_audio_offload_disconnect(struct snd_usb_audio *chip);
 extern bool aoc_alsa_usb_capture_enabled(void);
 extern bool aoc_alsa_usb_playback_enabled(void);
 

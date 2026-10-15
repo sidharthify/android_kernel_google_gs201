@@ -11,12 +11,9 @@ aoc_alsa_dev_util-objs		:= aoc_alsa_path.o aoc_alsa_drv.o \
 				   aoc_alsa_nohost.o aoc_alsa_incall.o  aoc_alsa_voip.o
 aoc_alsa_dev-objs		:= aoc_alsa_card.o
 
-# USB audio offload hooks into the audio_usboffload and sound vendor hooks,
-# which android16-6.12 doesn't have.
-ifneq ($(wildcard $(srctree)/include/trace/hooks/audio_usboffload.h),)
 aoc_alsa_dev_util-objs		+= aoc_alsa_usb.o
+ccflags-y			+= -I$(srctree)/sound/usb
 ccflags-y			+= -DAOC_ALSA_USB_OFFLOAD
-endif
 
 # DisplayPort audio feeds the display driver's DP audio DMA.
 ifeq ($(CONFIG_DRM_SAMSUNG_DP_AUDIO),y)

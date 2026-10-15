@@ -16,7 +16,9 @@
 #include <linux/workqueue.h>
 #include <linux/usb/hcd.h>
 
-#include <trace/hooks/audio_usboffload.h>
+#include <sound/pcm.h>
+#include "usbaudio.h"
+#include "card.h"
 
 #include "aoc_usb.h"
 #include "xhci-exynos.h"
@@ -161,6 +163,27 @@ static void usb_audio_vendor_disconnect(void *unused, struct usb_interface *intf
 		schedule_work(&offload_data->offload_connect_ws);
 	}
 }
+
+/*
+ * android16-6.12 has no audio_usb_offload vendor hooks, sound/usb calls the
+ * platform ops at the same places instead.
+ */
+static void usb_audio_platform_connect(struct snd_usb_audio *chip)
+{
+	usb_audio_offload_connect(chip);
+	usb_audio_vendor_connect(NULL, NULL, chip);
+}
+
+static void usb_audio_platform_disconnect(struct snd_usb_audio *chip)
+{
+	usb_audio_offload_disconnect(chip);
+	usb_audio_vendor_disconnect(NULL, NULL);
+}
+
+static struct snd_usb_platform_ops usb_audio_platform_ops = {
+	.connect_cb = usb_audio_platform_connect,
+	.disconnect_cb = usb_audio_platform_disconnect,
+};
 
 static int xhci_udev_notify(struct notifier_block *self, unsigned long action,
 			    void *dev)
@@ -385,18 +408,17 @@ static struct xhci_exynos_ops offload_ops = {
 	.offload_setup = usb_audio_offload_setup,
 };
 
+void xhci_offload_helper_exit(void)
+{
+	snd_usb_unregister_platform_ops();
+}
+
 int xhci_offload_helper_init(void)
 {
 	int ret;
 
-	ret = register_trace_android_vh_audio_usb_offload_connect(usb_audio_vendor_connect, NULL);
+	ret = snd_usb_register_platform_ops(&usb_audio_platform_ops);
 	if (ret)
-		pr_err("register_trace_android_vh_audio_usb_offload_connect failed: %d\n", ret);
-
-	ret = register_trace_android_rvh_audio_usb_offload_disconnect(usb_audio_vendor_disconnect,
-								      NULL);
-	if (ret)
-		pr_err("register_trace_android_rvh_audio_usb_offload_disconnect failed: %d\n", ret);
-
+		pr_err("snd_usb_register_platform_ops failed: %d\n", ret);
 	return xhci_exynos_register_offload_ops(&offload_ops);
 }

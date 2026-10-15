@@ -381,18 +381,12 @@ static int aoc_usb_probe(struct aoc_service_dev *adev)
 	dev_set_drvdata(dev, drvdata);
 	schedule_work(&usb_host_mode_checking_ws);
 
-	/* USB host mode needs support from AoC. */
-	dwc3_otg_host_ready(true);
-
 	return 0;
 }
 
 static int aoc_usb_remove(struct aoc_service_dev *adev)
 {
 	struct aoc_usb_drvdata *drvdata = dev_get_drvdata(&adev->dev);
-
-	/* USB host mode needs support from AoC. */
-	dwc3_otg_host_ready(false);
 
 	unregister_aoc_usb_notifier(&drvdata->nb);
 	wakeup_source_unregister(drvdata->ws);
@@ -431,6 +425,7 @@ static int __init aoc_usb_init(void)
 static void __exit aoc_usb_exit(void)
 {
 	aoc_driver_unregister(&aoc_usb_driver);
+	xhci_offload_helper_exit();
 }
 
 module_init(aoc_usb_init);
